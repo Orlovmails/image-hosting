@@ -13,6 +13,7 @@
 import json
 import logging
 import os
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -108,6 +109,31 @@ def resolve_inside(base_dir, name):
 def content_type_for(path):
     """Повертає тип вмісту за розширенням файлу."""
     return CONTENT_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
+
+
+# Розбираємо multipart руками
+def extract_file_data(handler):
+    """
+    Дістає з тіла запиту байти файлу і його початкове ім'я.
+    Якщо розібрати не вийшло, повертає порожнє, і тоді бекенд віддає 400.
+    """
+    length = int(handler.headers.get("Content-Length", 0) or 0)
+    body = handler.rfile.read(length)
+
+    # boundary інколи приходить у лапках або з параметром після нього, тому чистимо
+    header = handler.headers["Content-Type"].split("boundary=")[-1]
+    boundary = header.split(";")[0].strip().strip('"').encode()
+
+    # Самі дані починаються після порожнього рядка і йдуть до наступної межі
+    start = body.find(b"\r\n\r\n") + 4
+    end = body.find(b"\r\n--" + boundary, start)
+    if end == -1:
+        return b"", ""
+    data = body[start:end]
+
+    # Ім'я шукаємо тільки в заголовках частини, а не в байтах самої картінки
+    match = re.search(rb'filename="([^"]+)"', body[:start])
+    return data, match.group(1).decode() if match else ""
 
 
 # HTTP обробник
