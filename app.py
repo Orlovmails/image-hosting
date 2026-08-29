@@ -10,9 +10,12 @@
 Зі сторонніх бібліотек тут тільки Pillow, все інше дефолтні.
 """
 
+import json
 import logging
 import os
 import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
 
 # Налаштування
 
@@ -38,6 +41,14 @@ HARD_BODY_LIMIT = MAX_FILE_SIZE + 1024 * 1024
 # Який формат картинки якому розширенню відповідає.
 # Розширення беремо з реального вмісту, а не з імені файлу, так надійніше.
 FORMAT_TO_EXTENSION = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif"}
+
+# Сторінки сайту маршрут і файл у static/, який на ньому показуємо
+PAGES = {
+    "/": "index.html",
+    "/upload": "upload.html",
+    "/gallery": "images.html",
+    "/images/": "images.html",  
+}
 
 # Типи вмісту для статичних файлів
 CONTENT_TYPES = {
@@ -97,3 +108,80 @@ def resolve_inside(base_dir, name):
 def content_type_for(path):
     """Повертає тип вмісту за розширенням файлу."""
     return CONTENT_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
+
+
+# HTTP обробник
+
+class ImageServerHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    head_only = False  # вмикаємо на час HEAD, щоб віддати лише заголовки
+
+    # Дрібні методи, якими відповідаємо клієнту
+
+    def _send(self, code, body, content_type):
+        """Відправляє відповідь. Content-Length ставимо завжди."""
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        # Сторінки і JSON просимо не кешувати, інакше після оновлення сайту
+        # браузер ще довго показує стару версію
+        if content_type.startswith(("text/html", "application/json")):
+            self.send_header("Cache-Control", "no-cache")
+        if code not in (204, 304):
+            self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not self.head_only:
+            self.wfile.write(body)
+
+    def send_json(self, code, obj):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self._send(code, body, "application/json; charset=utf-8")
+
+    def send_file(self, base_dir, name, not_found_message):
+        """Віддає файл з base_dir і не дає вийти за межі цієї папки."""
+        path = resolve_inside(base_dir, name)
+        if path is None:
+            self.send_json(404, {"error": not_found_message})
+            return
+        with open(path, "rb") as f:
+            body = f.read()
+        self._send(200, body, content_type_for(path))
+
+    # Маршрути GET і HEAD
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+
+        if path in PAGES:
+            self.send_file(STATIC_DIR, PAGES[path], "сторінку не знайдено")
+        elif path.startswith(("/css/", "/js/", "/img/")):
+            self.send_file(STATIC_DIR, path, "файл не знайдено")
+        elif path == "/favicon.ico":
+            self._send(204, b"", "image/x-icon")
+        else:
+            self.send_json(404, {"error": "сторінку не знайдено"})
+
+    def do_HEAD(self):
+        """Ті самі маршрути, що і GET, тільки без тіла відповіді."""
+        self.head_only = True
+        try:
+            self.do_GET()
+        finally:
+            self.head_only = False
+
+    def log_message(self, format, *args):
+        # У нас є свій мега лог, а стандартний http.server тільки заважає
+        pass
+
+
+def main():
+    server = ThreadingHTTPServer((HOST, PORT), ImageServerHandler)
+    logger.info("Сервер запущено на http://%s:%s", HOST, PORT)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("Сервер зупинено")
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()
