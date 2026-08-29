@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="uk">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Завантаження зображення</title>
+    <link rel="stylesheet" href="/css/reset.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+
+<body>
+    <section class="upload__intro">
+        <h2 class="upload__title">Завантаження фото</h2>
+        <p class="upload__description">Завантажуйте селфі, меми чи будь-які картинки тут.</p>
+    </section>
+    <nav class="upload__tabs">
+        <button class="upload__tab upload__tab--active" id="upload-tab-btn">Завантажити</button>
+        <button class="upload__tab" id="images-tab-btn">Зображення</button>
+    </nav>
+    <section class="upload__form">
+        <div class="upload__dropzone">
+            <div class="upload__icon">
+                <img src="/img/icon/feather_upload-cloud.png" alt="icon">
+            </div>
+            <p class="upload__promt">Оберіть файл або перетягніть його сюди</p>
+            <p class="upload__info">Підтримуються лише .jpg, .png та .gif. <br>
+                Максимальний розмір файлу 5 МБ</p>
+        </div>
+        <div class="upload__button">
+            <input type="file" id="file-upload" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif" style="display: none;" multiple>
+            <label for="file-upload" class="upload__button-btn">Обрати файл</label>
+        </div>
+        <div class="upload__container">
+            <div class="upload__group">
+                <h2 class="upload__title-current">Поточне посилання</h2>
+                <div class="upload__label">
+                    <input type="text" class="upload__input" placeholder="https://" readonly />
+                    <button class="upload__copy">КОПІЮВАТИ</button>
+                </div>
+            </div>
+        </div>
+    </section>
+    <section id="file-list-wrapper">
+    </section>
+</body>
+
+</html>
