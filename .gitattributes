@@ -1,0 +1,10 @@
+# Однакові переноси рядків на всіх операціних помийках.
+# Для Linux контейнерів усі текстові файли мають бути з LF інакше nginx/Docker помирають
+* text=auto eol=lf
+
+# Зображення бінарні, git не має з них знущатись
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary

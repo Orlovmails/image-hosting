@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Дані застосунку зберігаються у Docker-томах, а не в git
+images/*
+!images/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Системні файли та редактори
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
