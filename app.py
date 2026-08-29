@@ -79,3 +79,21 @@ def log(action, message):
     """Пише рядок у лог у форматі з ТЗ: [Дата/час] Дія: повідомлення."""
     level = logging.WARNING if action == "Помилка" else logging.INFO
     logger.log(level, "%s: %s", action, message)
+
+
+# Доп функції
+
+def resolve_inside(base_dir, name):
+    """
+    Робить з імені у посиланні шлях усередині base_dir.
+    Якщо файлу немає або шлях виводить за межі папки, повертаємо None.
+    Порівнюємо разом з роздільником, інакше пройшла б сусідня папка images_secret.
+    """
+    path = os.path.normpath(os.path.join(base_dir, name.lstrip("/\\")))
+    inside = path == base_dir or path.startswith(base_dir + os.sep)
+    return path if inside and os.path.isfile(path) else None
+
+
+def content_type_for(path):
+    """Повертає тип вмісту за розширенням файлу."""
+    return CONTENT_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
