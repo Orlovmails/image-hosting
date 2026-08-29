@@ -10,7 +10,9 @@
 Зі сторонніх бібліотек тут тільки Pillow, все інше дефолтні.
 """
 
+import logging
 import os
+import sys
 
 # Налаштування
 
@@ -49,3 +51,31 @@ CONTENT_TYPES = {
     ".ico": "image/x-icon",
     ".svg": "image/svg+xml",
 }
+
+# Логи
+
+os.makedirs(IMAGES_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
+
+# Консоль у Windows не в UTF-8, і без цього замість українських літер
+# у ній виходять кракозябри. logging пише в stderr, тому чіпаємо обидва потоки.
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.FileHandler(os.path.join(LOGS_DIR, "app.log"), encoding="utf-8"),
+        logging.StreamHandler(),  # дублюємо в консоль, щоб було видно в docker logs
+    ],
+)
+logger = logging.getLogger("image-server")
+
+
+def log(action, message):
+    """Пише рядок у лог у форматі з ТЗ: [Дата/час] Дія: повідомлення."""
+    level = logging.WARNING if action == "Помилка" else logging.INFO
+    logger.log(level, "%s: %s", action, message)
