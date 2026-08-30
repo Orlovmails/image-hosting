@@ -203,16 +203,72 @@ class ImageServerHandler(BaseHTTPRequestHandler):
     # Маршрути POST
 
     def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
         if urlparse(self.path).path == "/upload":
-            self.handle_upload()
+            self.handle_upload(length)
         else:
+            # Тіло дочитуємо навіть для 404, інакше клієнт побачить обрив з'єднання і дулю
+            self._discard_body(length)
             self.send_json(404, {"error": "маршрут не знайдено"})
 
-    def handle_upload(self):
+    def _discard_body(self, length, cap=HARD_BODY_LIMIT * 2):
+        """
+        Дочитує і викидає тіло запиту, щоб клієнт встиг його дописати
+        і побачити нашу відповідь. Без цього при ранній відмові з'єднання
+        рветься (Broken pipe) ще до того, як клієнт прочитає помилку.
+        Дуже велике тіло не дочитуємо, просто закриваємо з'єднання.
+        """
+        remaining = min(length, cap)
+        while remaining > 0:
+            chunk = self.rfile.read(min(65536, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+        if length > cap:
+            self.close_connection = True
+
+    def handle_upload(self, length):
+        content_type = self.headers.get("Content-Type", "")
+
+        if "multipart/form-data" not in content_type or "boundary=" not in content_type:
+            self._discard_body(length)
+            log("Помилка", "некоректний запит завантаження (немає multipart/form-data)")
+            self.send_json(400, {"error": "очікується multipart/form-data"})
+            return
+
+        if length <= 0:
+            if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+                log("Помилка", "запит завантаження без Content-Length (chunked)")
+                self.send_json(400, {"error": "потрібен заголовок Content-Length"})
+                return
+            log("Помилка", "порожній запит завантаження")
+            self.send_json(400, {"error": "файл не надіслано"})
+            return
+
+        # Розмір бачимо ще із заголовка, але тіло однаково треба дочитати,
+        # інакше замість відповіді 400 клієнт отримає обрив з'єднання і дулю
+        if length > HARD_BODY_LIMIT:
+            self._discard_body(length)
+            log("Помилка", f"тіло запиту ({length} байт) перевищує ліміт розміру (5 МБ)")
+            self.send_json(400, {"error": "файл більший за 5 МБ"})
+            return
+
         data, original_name = extract_file_data(self)
         if not data or not original_name:
             log("Помилка", "файл не знайдено у запиті")
             self.send_json(400, {"error": "файл не надіслано"})
+            return
+
+        # Тепер перевіряємо розмір уже самого файлу
+        if len(data) > MAX_FILE_SIZE:
+            log("Помилка", f"файл завеликий ({original_name})")
+            self.send_json(400, {"error": "файл більший за 5 МБ"})
+            return
+
+        # Дивимось на розширення
+        if os.path.splitext(original_name)[1].lower() not in ALLOWED_EXTENSIONS:
+            log("Помилка", f"непідтримуваний формат файлу ({original_name})")
+            self.send_json(400, {"error": "непідтримуваний формат файлу"})
             return
 
         # Ім'я робимо унікальним, щоб файли не перезаписували один одного

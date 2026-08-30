@@ -116,6 +116,40 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body, png)
 
+    def test_reject_unsupported_extension(self):
+        code, res = post_upload("note.txt", make_image("PNG"), "text/plain")
+        self.assertEqual(code, 400)
+        self.assertIn("формат", res["error"])
+
+    def test_reject_oversize(self):
+        big = b"\x00" * (7 * 1024 * 1024)
+        code, res = post_upload("big.png", big, "image/png")
+        self.assertEqual(code, 400)
+
+    def test_reject_non_multipart(self):
+        req = urllib.request.Request(
+            _base_url + "/upload", data=b"x", method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            code = urllib.request.urlopen(req).status
+        except urllib.error.HTTPError as e:
+            code = e.code
+        self.assertEqual(code, 400)
+
+    def test_unknown_post_route_404(self):
+        req = urllib.request.Request(
+            _base_url + "/nope", data=b"x" * 1024, method="POST",
+            headers={"Content-Type": "multipart/form-data; boundary=zzz"},
+        )
+        try:
+            code = urllib.request.urlopen(req).status
+        except urllib.error.HTTPError as e:
+            code = e.code
+        self.assertEqual(code, 404)
+
+
+
 
 class FakeHandler:
     """Проста підміна HTTP-обробника, у якій є тільки заголовки і тіло запиту."""
