@@ -15,8 +15,9 @@ import logging
 import os
 import re
 import sys
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 # Налаштування
 
@@ -181,6 +182,10 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             self.send_file(STATIC_DIR, PAGES[path], "сторінку не знайдено")
         elif path.startswith(("/css/", "/js/", "/img/")):
             self.send_file(STATIC_DIR, path, "файл не знайдено")
+        elif path.startswith("/images/"):
+            # У Docker ці запити забирає Nginx. А коли запускаємо без Docker,
+            # картинку віддає сам Python прямо з папки IMAGES_DIR.
+            self.send_file(IMAGES_DIR, unquote(path[len("/images/"):]), "зображення не знайдено")
         elif path == "/favicon.ico":
             self._send(204, b"", "image/x-icon")
         else:
@@ -193,6 +198,36 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             self.do_GET()
         finally:
             self.head_only = False
+
+
+    # Маршрути POST
+
+    def do_POST(self):
+        if urlparse(self.path).path == "/upload":
+            self.handle_upload()
+        else:
+            self.send_json(404, {"error": "маршрут не знайдено"})
+
+    def handle_upload(self):
+        data, original_name = extract_file_data(self)
+        if not data or not original_name:
+            log("Помилка", "файл не знайдено у запиті")
+            self.send_json(400, {"error": "файл не надіслано"})
+            return
+
+        # Ім'я робимо унікальним, щоб файли не перезаписували один одного
+        unique_name = uuid.uuid4().hex + os.path.splitext(original_name)[1].lower()
+
+        try:
+            with open(os.path.join(IMAGES_DIR, unique_name), "wb") as f:
+                f.write(data)
+        except OSError:
+            log("Помилка", f"не вдалося зберегти файл ({original_name})")
+            self.send_json(500, {"error": "не вдалося зберегти файл"})
+            return
+
+        log("Успіх", f"зображення {unique_name} завантажено")
+        self.send_json(200, {"id": unique_name, "url": "/images/" + unique_name})
 
     def log_message(self, format, *args):
         # У нас є свій мега лог, а стандартний http.server тільки заважає

@@ -7,6 +7,7 @@
 """
 
 import io
+import json
 import os
 import sys
 import tempfile
@@ -24,6 +25,7 @@ os.environ["IMAGES_DIR"] = os.path.join(_TMP, "images")
 os.environ["LOGS_DIR"] = os.path.join(_TMP, "logs")
 
 import app  # noqa: E402 імпортуємо саме тут, після підстановки папок
+from PIL import Image  # noqa: E402
 
 _server = None
 _base_url = None
@@ -42,6 +44,40 @@ def tearDownModule():
         _server.shutdown()
 
 
+def make_image(fmt, size=(20, 20)):
+    """Робить байти справжньої картинки потрібного формату."""
+    buf = io.BytesIO()
+    mode = "P" if fmt == "GIF" else "RGB"
+    Image.new(mode, size, 0 if mode == "P" else (10, 120, 200)).save(buf, fmt)
+    return buf.getvalue()
+
+
+def post_upload(filename, data, content_type="application/octet-stream", boundary_header=None):
+    """
+    Надсилає multipart-запит на /upload.
+    Через boundary_header можна підсунути незвичний запис межі
+    (у лапках або з параметром), бо деякі клієнти шлють саме так.
+    """
+    boundary = "----unittestboundary"
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="image"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode()
+    body = head + data + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(
+        _base_url + "/upload",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "multipart/form-data; boundary=" + (boundary_header or boundary)},
+    )
+    try:
+        resp = urllib.request.urlopen(req)
+        return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
 def http_request(path, method="GET"):
     req = urllib.request.Request(_base_url + path, method=method)
     try:
@@ -53,6 +89,32 @@ def http_request(path, method="GET"):
 
 def http_get(path):
     return http_request(path)
+
+
+class UploadTests(unittest.TestCase):
+    def test_valid_png(self):
+        code, res = post_upload("pic.png", make_image("PNG"), "image/png")
+        self.assertEqual(code, 200)
+        self.assertTrue(res["url"].startswith("/images/"))
+        self.assertTrue(res["url"].endswith(".png"))
+
+    def test_valid_gif(self):
+        code, res = post_upload("anim.gif", make_image("GIF"), "image/gif")
+        self.assertEqual(code, 200)
+        self.assertTrue(res["url"].endswith(".gif"))
+
+    def test_valid_jpeg(self):
+        code, res = post_upload("photo.jpg", make_image("JPEG"), "image/jpeg")
+        self.assertEqual(code, 200)
+        self.assertTrue(res["url"].endswith(".jpg"))
+
+    def test_saved_image_is_served_and_matches(self):
+        png = make_image("PNG")
+        code, res = post_upload("pic.png", png, "image/png")
+        self.assertEqual(code, 200)
+        code, body = http_get(res["url"])
+        self.assertEqual(code, 200)
+        self.assertEqual(body, png)
 
 
 class FakeHandler:
