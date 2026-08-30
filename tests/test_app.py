@@ -241,6 +241,35 @@ class ExtractFileDataTests(unittest.TestCase):
 
 
 
+class DeleteTests(unittest.TestCase):
+    def test_delete_removes_file(self):
+        code, res = post_upload("pic.png", make_image("PNG"), "image/png")
+        name = res["id"]
+
+        code, body = http_request("/api/images/" + name, method="DELETE")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)["deleted"], name)
+
+        # файл більше не віддається і зник зі списку
+        self.assertEqual(http_get("/images/" + name)[0], 404)
+        self.assertNotIn(name, json.loads(http_get("/api/images")[1]))
+
+    def test_delete_missing_file_returns_404(self):
+        code, _ = http_request("/api/images/nemaje.png", method="DELETE")
+        self.assertEqual(code, 404)
+
+    def test_delete_cannot_escape_images_dir(self):
+        """Спробу видалити файл за межами папки з картинками треба відхиляти."""
+        outside = os.path.join(os.environ["LOGS_DIR"], "app.log")
+        code, _ = http_request("/api/images/..%2Flogs%2Fapp.log", method="DELETE")
+        self.assertEqual(code, 404)
+        self.assertTrue(os.path.exists(outside))
+
+    def test_delete_unknown_route_returns_404(self):
+        code, _ = http_request("/api/nope/x.png", method="DELETE")
+        self.assertEqual(code, 404)
+
+
 class PageTests(unittest.TestCase):
     def test_home_page(self):
         code, body = http_get("/")
@@ -285,6 +314,22 @@ class StaticFileTests(unittest.TestCase):
         code, body = http_get("/css/../app.py")
         self.assertEqual(code, 404)
         self.assertNotIn(b"BASE_DIR", body)
+
+
+
+class PathSafetyTests(unittest.TestCase):
+    def test_parent_directory_traversal_blocked(self):
+        code, _ = http_get("/images/..%2F..%2Fapp.py")
+        self.assertEqual(code, 404)
+
+    def test_sibling_directory_with_same_prefix_blocked(self):
+        """Сусідня папка images_secret не повинна бути доступна."""
+        sibling = os.environ["IMAGES_DIR"] + "_secret"
+        os.makedirs(sibling, exist_ok=True)
+        with open(os.path.join(sibling, "secret.png"), "wb") as f:
+            f.write(b"TOP-SECRET")
+        code, body = http_get("/images/..%2Fimages_secret%2Fsecret.png")
+        self.assertEqual(code, 404)
 
 
 if __name__ == "__main__":

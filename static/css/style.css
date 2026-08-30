@@ -237,7 +237,7 @@ body {
 
 /* Container for the entire table */
 .file-list-container {
-    max-width: 800px;
+    max-width: 1150px;
     margin: 0 auto;
     padding: 20px;
     border-radius: 8px;
@@ -248,8 +248,8 @@ body {
 .file-list-header,
 .file-list-item {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    gap: 10px;
     padding: 10px 0;
     border-bottom: 1px solid #eef0f5;
 }
@@ -270,6 +270,7 @@ body {
 .file-col {
     display: flex;
     align-items: center;
+    color: #333333;
 }
 
 .file-col-name {
@@ -278,13 +279,14 @@ body {
 
 .file-col-url {
     flex-basis: 50%;
-    color: #555;
+    color: #333333;
     font-size: 14px;
 }
 
 .file-col-delete {
     flex-basis: 10%;
-    justify-content: center;
+    justify-content: flex-start;
+    color: #333333;
 }
 
 /* File icon */
@@ -303,7 +305,7 @@ body {
 .file-name {
     color: #333;
     font-weight: 500;
-    max-width: 200px;
+    max-width: 350px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -322,6 +324,11 @@ body {
     padding: 0;
     transition: opacity 0.2s ease;
     /* Add a smooth transition for hover effect */
+    /* тепер кнопка з текстом, а не з іконкою */
+    color: #0060ff;
+    font-family: inherit;
+    font-size: 14px;
+    white-space: nowrap;
 }
 
 /* Hover effect */

@@ -213,6 +213,34 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         except OSError:
             self.send_json(500, {"error": "не вдалося прочитати каталог зображень"})
 
+    # Маршрут DELETE
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        if path.startswith("/api/images/"):
+            self.handle_delete_image(unquote(path[len("/api/images/"):]))
+        else:
+            self.send_json(404, {"error": "маршрут не знайдено"})
+
+    def handle_delete_image(self, name):
+        """Видаляє картинку з папки images. Ім'я перевіряємо, щоб не вилізти за межі."""
+        path = resolve_inside(IMAGES_DIR, name)
+        if path is None:
+            log("Помилка", f"спроба видалити неіснуючий файл ({name})")
+            self.send_json(404, {"error": "зображення не знайдено"})
+            return
+
+        try:
+            os.remove(path)
+        except OSError:
+            log("Помилка", f"не вдалося видалити файл ({name})")
+            self.send_json(500, {"error": "не вдалося видалити файл"})
+            return
+
+        deleted_name = os.path.basename(path)
+        log("Успіх", f"зображення {deleted_name} видалено")
+        self.send_json(200, {"deleted": deleted_name})
+
     # Маршрути POST
 
     def do_POST(self):

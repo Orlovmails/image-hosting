@@ -20,7 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
         header.innerHTML = `
             <div class="file-col file-col-name">Файл</div>
             <div class="file-col file-col-url">Посилання</div>
-            <div class="file-col file-col-delete">Перегляд</div>
+            <div class="file-col file-col-delete">Видалити</div>
         `;
         container.appendChild(header);
 
@@ -38,13 +38,36 @@ document.addEventListener('DOMContentLoaded', () => {
                     <span class="file-name">${name}</span>
                 </div>
                 <div class="file-col file-col-url"><a href="${url}" target="_blank">${fullUrl}</a></div>
-                <div class="file-col file-col-delete"><a href="${url}" target="_blank">Відкрити</a></div>
+                <div class="file-col file-col-delete">
+                    <button class="delete-btn" data-name="${name}">Видалити</button>
+                </div>
             `;
             list.appendChild(item);
         });
 
         container.appendChild(list);
         fileListWrapper.appendChild(container);
+        addDeleteListeners();
+    };
+
+    // Видаляє файл на сервері через DELETE /api/images/ім'я і оновлює список
+    const addDeleteListeners = () => {
+        document.querySelectorAll('.delete-btn').forEach((button) => {
+            button.addEventListener('click', async (event) => {
+                const name = event.currentTarget.dataset.name;
+                try {
+                    const response = await fetch('/api/images/' + encodeURIComponent(name), {
+                        method: 'DELETE',
+                    });
+                    if (!response.ok) {
+                        throw new Error(`сервер відповів ${response.status}`);
+                    }
+                    loadFiles();
+                } catch (err) {
+                    console.error('Не вдалося видалити файл:', err);
+                }
+            });
+        });
     };
 
     // Забираємо список імен з бекенду
