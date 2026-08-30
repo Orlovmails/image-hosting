@@ -10,6 +10,7 @@
 Зі сторонніх бібліотек тут тільки Pillow, все інше дефолтні.
 """
 
+import io
 import json
 import logging
 import os
@@ -18,6 +19,8 @@ import sys
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote
+
+from PIL import Image
 
 # Налаштування
 
@@ -271,8 +274,23 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "непідтримуваний формат файлу"})
             return
 
-        # Ім'я робимо унікальним, щоб файли не перезаписували один одного
-        unique_name = uuid.uuid4().hex + os.path.splitext(original_name)[1].lower()
+        # Перевіряємо через Pillow, чи це справді картинка, а не фігня
+        try:
+            image = Image.open(io.BytesIO(data))
+            image_format = image.format
+            image.verify()
+        except Exception:
+            log("Помилка", f"файл не є коректним зображенням ({original_name})")
+            self.send_json(400, {"error": "файл пошкоджено або це не зображення"})
+            return
+
+        if image_format not in FORMAT_TO_EXTENSION:
+            log("Помилка", f"непідтримуваний формат зображення ({original_name})")
+            self.send_json(400, {"error": "непідтримуваний формат файлу"})
+            return
+
+        # Розширення ставимо за справжнім форматом, щоб png не росказував що він jpg
+        unique_name = uuid.uuid4().hex + FORMAT_TO_EXTENSION[image_format]
 
         try:
             with open(os.path.join(IMAGES_DIR, unique_name), "wb") as f:

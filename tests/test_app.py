@@ -116,6 +116,10 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body, png)
 
+    def test_reject_text_disguised_as_jpg(self):
+        code, res = post_upload("fake.jpg", b"this is not an image", "image/jpeg")
+        self.assertEqual(code, 400)
+
     def test_reject_unsupported_extension(self):
         code, res = post_upload("note.txt", make_image("PNG"), "text/plain")
         self.assertEqual(code, 400)
