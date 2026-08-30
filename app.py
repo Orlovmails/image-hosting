@@ -40,6 +40,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
 MAX_FILE_SIZE = 5 * 1024 * 1024                  # 5 МБ максимум для самого файлу
 # Трохи більше за 5 МБ, бо крім самого файлу в тілі запиту є ще службові рядки.
+# Таке саме число стоїть у nginx.conf (client_max_body_size 6m), щоб не було різнобою.
 HARD_BODY_LIMIT = MAX_FILE_SIZE + 1024 * 1024
 
 # Який формат картинки якому розширенню відповідає.
@@ -151,6 +152,10 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         """Відправляє відповідь. Content-Length ставимо завжди."""
         self.send_response(code)
         self.send_header("Content-Type", content_type)
+        # Сторінки і JSON просимо не кешувати, інакше після оновлення сайту
+        # браузер ще довго показує стару версію
+        if content_type.startswith(("text/html", "application/json")):
+            self.send_header("Cache-Control", "no-cache")
         if code not in (204, 304):
             self.send_header("Content-Length", str(len(body)))
         self.end_headers()

@@ -1,0 +1,18 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Дані застосунку лежать у томах, в образі вони не потрібні
+images
+logs
+
+# Сміття від Python
+__pycache__
+*.pyc
+.venv
+venv
+
+# Тести і документація в образі теж не потрібні
+tests
+README.md

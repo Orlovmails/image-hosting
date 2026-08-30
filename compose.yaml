@@ -1,0 +1,47 @@
+services:
+  app:
+    build: .
+    container_name: image-server-app
+    environment:
+      IMAGES_DIR: /images
+      LOGS_DIR: /logs
+      PORT: "8000"
+    volumes:
+      - images:/images        # том для завантажених картінок
+      - logs:/logs            # том для логів (app.log)
+      # Та сама папка static, що і в Nginx. Інакше після правки HTML треба було б
+      # перезбирати образ, а CSS і JS оновлювались би одразу, і виходив би вінегрет.
+      - ./static:/app/static:ro
+    ports:
+      # Порт лише для локальної перевірки. Ззовні доступний тільки Nginx,
+      # бо за ТЗ файли мають роздаватись через нього, без обхідних шляхів.
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    networks:
+      - app-net
+
+  # Nginx роздає картінки з тому і статику, а решту передає на бекенд
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: image-server-nginx
+    depends_on:
+      - app
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./static:/usr/share/nginx/html:ro   # CSS, JS і картінки сайту
+      - images:/images:ro                   # той самий том, тільки для читання
+    ports:
+      - "8080:80"           # користувачі заходять сюди
+    restart: unless-stopped
+    networks:
+      - app-net
+
+# Два томи для постійного зберігання
+volumes:
+  images:
+  logs:
+
+# Внутрішня мережа, через неї nginx звертається до бекенду за іменем app
+networks:
+  app-net:
+    driver: bridge
