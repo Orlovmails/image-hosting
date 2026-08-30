@@ -20,8 +20,10 @@
             <h1 class="header__title">Завантаження фото</h1>
             <p class="header__text">Завантажуйте селфі, меми чи будь-які картинки та отримуйте пряме посилання.</p>
         </div>
+        <!-- Посилання на основні маршрути сервісу (вимога ТЗ) -->
         <div class="header__button">
-            <button class="header__button-btn">Завантажити</button>
+            <button class="header__button-btn" data-href="/upload">Завантажити зображення</button>
+            <button class="header__button-btn" data-href="/images/">Каталог зображень</button>
         </div>
     </header>
     <main>
@@ -43,6 +45,7 @@
             </div>
         </div>
     </main>
+    <script src="/js/index.js"></script>
 </body>
 
 </html>

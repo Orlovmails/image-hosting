@@ -40,7 +40,6 @@ PORT = int(os.environ.get("PORT", "8000"))
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
 MAX_FILE_SIZE = 5 * 1024 * 1024                  # 5 МБ максимум для самого файлу
 # Трохи більше за 5 МБ, бо крім самого файлу в тілі запиту є ще службові рядки.
-# Таке саме число стоїть у nginx.conf (client_max_body_size 6m), щоб не було різнобою.
 HARD_BODY_LIMIT = MAX_FILE_SIZE + 1024 * 1024
 
 # Який формат картинки якому розширенню відповідає.
@@ -152,10 +151,6 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         """Відправляє відповідь. Content-Length ставимо завжди."""
         self.send_response(code)
         self.send_header("Content-Type", content_type)
-        # Сторінки і JSON просимо не кешувати, інакше після оновлення сайту
-        # браузер ще довго показує стару версію
-        if content_type.startswith(("text/html", "application/json")):
-            self.send_header("Cache-Control", "no-cache")
         if code not in (204, 304):
             self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -183,6 +178,8 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
         if path in PAGES:
             self.send_file(STATIC_DIR, PAGES[path], "сторінку не знайдено")
+        elif path == "/api/images":
+            self.handle_list_images()
         elif path.startswith(("/css/", "/js/", "/img/")):
             self.send_file(STATIC_DIR, path, "файл не знайдено")
         elif path.startswith("/images/"):
@@ -202,6 +199,19 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         finally:
             self.head_only = False
 
+    def handle_list_images(self):
+        """Віддає JSON зі списком імен картинок, найновіші йдуть першими."""
+        try:
+            entries = []
+            for name in os.listdir(IMAGES_DIR):
+                full = os.path.join(IMAGES_DIR, name)
+                ext = os.path.splitext(name)[1].lower()
+                if os.path.isfile(full) and ext in ALLOWED_EXTENSIONS:
+                    entries.append((os.path.getmtime(full), name))
+            entries.sort(reverse=True)
+            self.send_json(200, [name for _, name in entries])
+        except OSError:
+            self.send_json(500, {"error": "не вдалося прочитати каталог зображень"})
 
     # Маршрути POST
 

@@ -28,20 +28,25 @@ body {
 .header__button {
     display: flex;
     justify-content: center;
+    gap: 16px;
     padding-top: 40px;
 }
 
 .header__button-btn {
-    position: absolute;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     text-transform: uppercase;
     padding: 12px 16px;
     font-size: 12px;
     background-color: rgb(0, 96, 255);
     color: rgb(255, 255, 255);
-    width: 160px;
+    min-width: 160px;
     height: 40px;
+    white-space: nowrap;
     border: none;
     border-radius: 7px;
+    cursor: pointer;
 }
 
 /* hero__img */
@@ -214,8 +219,13 @@ body {
 }
 
 .upload__copy {
-    width: 60px;
+    /* Зробив кнопку ширшою, бо текст не вміщався */
+    min-width: 96px;
     height: 30px;
+    padding: 0 14px;
+    margin-left: 12px;
+    flex-shrink: 0;
+    white-space: nowrap;
     border-radius: 12px;
     border: none;
     background-color: rgb(0, 96, 255);
@@ -320,4 +330,11 @@ body {
     /* REMOVE BACKGROUND ON HOVER */
     opacity: 0.7;
     /* Make the icon semi-transparent for user feedback */
+}
+
+/* + Кнопка повернення на головну */
+.upload__home {
+    display: flex;
+    justify-content: center;
+    padding: 10px 0 60px;
 }

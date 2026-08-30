@@ -116,6 +116,28 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body, png)
 
+    def test_boundary_in_quotes(self):
+        """boundary у лапках теж правильний за RFC 2046, має прийматись."""
+        code, res = post_upload(
+            "pic.png", make_image("PNG"), "image/png",
+            boundary_header='"----unittestboundary"',
+        )
+        self.assertEqual(code, 200)
+
+    def test_boundary_with_extra_parameter(self):
+        code, res = post_upload(
+            "pic.png", make_image("PNG"), "image/png",
+            boundary_header="----unittestboundary; charset=utf-8",
+        )
+        self.assertEqual(code, 200)
+
+    def test_uploaded_appears_in_listing(self):
+        code, res = post_upload("pic.png", make_image("PNG"), "image/png")
+        name = res["id"]
+        code, body = http_get("/api/images")
+        self.assertEqual(code, 200)
+        self.assertIn(name, json.loads(body))
+
     def test_reject_text_disguised_as_jpg(self):
         code, res = post_upload("fake.jpg", b"this is not an image", "image/jpeg")
         self.assertEqual(code, 400)
@@ -229,6 +251,12 @@ class PageTests(unittest.TestCase):
         code, body = http_get("/upload")
         self.assertEqual(code, 200)
         self.assertIn(b"<html", body.lower())
+
+    def test_home_page_links_to_upload_and_catalog(self):
+        """За ТЗ на головній мають бути посилання на /upload і на каталог /images/."""
+        code, body = http_get("/")
+        self.assertIn(b'data-href="/upload"', body)
+        self.assertIn(b'data-href="/images/"', body)
 
     def test_catalog_page_at_images_slash(self):
         """За ТЗ каталог зображень має відкриватись за адресою /images/."""
