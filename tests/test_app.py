@@ -16,6 +16,7 @@ import unittest
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
+from unittest import mock
 
 # Щоб можна було зробити import app, додаємо корінь проєкту в шляхи пошуку
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,16 +26,29 @@ os.environ["IMAGES_DIR"] = os.path.join(_TMP, "images")
 os.environ["LOGS_DIR"] = os.path.join(_TMP, "logs")
 
 import app  # noqa: E402 імпортуємо саме тут, після підстановки папок
+import psycopg2  # noqa: E402
 from PIL import Image  # noqa: E402
 
 _server = None
 _base_url = None
 
+# Фейкова база: справжнього Postgres у тестах немає, тому рядки таблиці images
+# просто складаємо в список, з полями в тому ж порядку, що й у save_metadata
+fake_rows = []
+
+
+def fake_save_metadata(filename, original_name, size, file_type):
+    fake_rows.append({
+        "filename": filename,
+        "original_name": original_name,
+        "size": size,
+        "file_type": file_type,
+    })
+
 
 def setUpModule():
     global _server, _base_url
-    # Справжньої бази в тестах немає, тому запис метаданих поки просто пропускаємо
-    app.save_metadata = lambda *args: None
+    app.save_metadata = fake_save_metadata
     _server = ThreadingHTTPServer(("127.0.0.1", 0), app.ImageServerHandler)
     port = _server.server_address[1]
     _base_url = f"http://127.0.0.1:{port}"
@@ -177,6 +191,64 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(code, 404)
 
 
+class MetadataTests(unittest.TestCase):
+    def upload_and_get_row(self, filename, data, content_type):
+        code, res = post_upload(filename, data, content_type)
+        self.assertEqual(code, 200)
+        self.assertEqual(fake_rows[-1]["filename"], res["id"])
+        return fake_rows[-1]
+
+    def test_metadata_for_jpg_png_gif(self):
+        for fmt, filename, file_type in (
+            ("JPEG", "photo1.jpg", "jpg"),
+            ("PNG", "diagram.png", "png"),
+            ("GIF", "anim.gif", "gif"),
+        ):
+            data = make_image(fmt)
+            row = self.upload_and_get_row(filename, data, "image/" + file_type)
+            self.assertEqual(row["original_name"], filename)
+            self.assertEqual(row["size"], len(data))
+            self.assertEqual(row["file_type"], file_type)
+
+    def test_metadata_for_big_file(self):
+        # Шум погано стискається, тож png виходить близько 3 МБ
+        image = Image.frombytes("RGB", (1000, 1000), os.urandom(3 * 1000 * 1000))
+        buf = io.BytesIO()
+        image.save(buf, "PNG")
+        data = buf.getvalue()
+        row = self.upload_and_get_row("big.png", data, "image/png")
+        self.assertEqual(row["size"], len(data))
+
+    def test_file_type_from_content_not_name(self):
+        # png, названий як jpg, у базу потрапляє як png
+        row = self.upload_and_get_row("fake_name.jpg", make_image("PNG"), "image/jpeg")
+        self.assertEqual(row["file_type"], "png")
+        self.assertTrue(row["filename"].endswith(".png"))
+
+    def test_rejected_file_not_saved_to_db(self):
+        count = len(fake_rows)
+        code, _ = post_upload("fake.jpg", b"this is not an image", "image/jpeg")
+        self.assertEqual(code, 400)
+        self.assertEqual(len(fake_rows), count)
+
+    def test_file_removed_when_db_fails(self):
+        files_before = set(os.listdir(app.IMAGES_DIR))
+        error = psycopg2.OperationalError("база не відповідає")
+        with mock.patch.object(app, "save_metadata", side_effect=error):
+            code, res = post_upload("pic.png", make_image("PNG"), "image/png")
+        self.assertEqual(code, 500)
+        self.assertIn("error", res)
+        self.assertEqual(set(os.listdir(app.IMAGES_DIR)), files_before)
+
+    def test_db_error_is_logged(self):
+        error = psycopg2.OperationalError("база не відповідає")
+        with mock.patch.object(app, "save_metadata", side_effect=error):
+            post_upload("logged.png", make_image("PNG"), "image/png")
+        with open(os.path.join(app.LOGS_DIR, "app.log"), encoding="utf-8") as f:
+            last_line = f.read().strip().splitlines()[-1]
+        self.assertIn("Помилка", last_line)
+        self.assertIn("logged.png", last_line)
+        self.assertIn("база не відповідає", last_line)
 
 
 class FakeHandler:
