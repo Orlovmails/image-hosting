@@ -6,6 +6,14 @@ services:
       IMAGES_DIR: /images
       LOGS_DIR: /logs
       PORT: "8000"
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: images_db
+      DB_USER: postgres
+      DB_PASSWORD: password
+    depends_on:
+      db:
+        condition: service_healthy   # чекаємо, поки postgres реально прийматиме з'єднання
     volumes:
       - images:/images        # том для завантажених картінок
       - logs:/logs            # том для логів (app.log)
@@ -36,10 +44,34 @@ services:
     networks:
       - app-net
 
-# Два томи для постійного зберігання
+  # База для метаданих картінок.
+  # Версію беру 17, бо з 18-ї postgres зберігає дані в іншій папці,
+  # і том на /var/lib/postgresql/data там уже не паше.
+  db:
+    image: postgres:17-alpine
+    container_name: postgres_container
+    environment:
+      POSTGRES_DB: images_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"   # як і бекенд, тільки для локальної перевірки
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d images_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - app-net
+
+# Томи для постійного зберігання
 volumes:
   images:
   logs:
+  db_data:
 
 # Внутрішня мережа, через неї nginx звертається до бекенду за іменем app
 networks:
