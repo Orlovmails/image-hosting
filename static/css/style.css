@@ -345,3 +345,28 @@ body {
     justify-content: center;
     padding: 10px 0 60px;
 }
+
+/* Сторінка /images-list */
+.images-list {
+    max-width: 1150px;
+    margin: 0 auto;
+    padding: 40px 20px 60px;
+    color: #333333;
+}
+
+.images-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.images-table th,
+.images-table td {
+    padding: 10px;
+    text-align: left;
+}
+
+.images-list__empty {
+    text-align: center;
+    margin-top: 50px;
+    color: rgb(11, 11, 11);
+}

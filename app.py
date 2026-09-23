@@ -5,12 +5,14 @@
    віддає сторінки сайту з папки static/
    приймає картінки на POST /upload, перевіряє їх і зберігає
    віддає список завантажених файлів на GET /api/images
+   показує таблицю картінок з бази на GET /images-list
    записує всі дії в лог app.log
    зберігає метадані картінок у PostgreSQL
 
 Зі сторонніх бібліотек тут Pillow і psycopg2, все інше дефолтні.
 """
 
+import html
 import io
 import json
 import logging
@@ -146,6 +148,17 @@ def save_metadata(filename, original_name, size, file_type):
         conn.close()
 
 
+def get_images():
+    """Всі записи з таблиці images, останні завантажені першими."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM images ORDER BY upload_time DESC")
+        return cursor.fetchall()
+    finally:
+        conn.close()
+
+
 # Доп функції
 
 def resolve_inside(base_dir, name):
@@ -189,6 +202,37 @@ def extract_file_data(handler):
     return data, match.group(1).decode() if match else ""
 
 
+# Сторінка списку зображень
+
+def render_images_table(rows):
+    """Робить HTML-таблицю з рядків бази. Оригінальне ім'я прийшло від користувача, тому екрануємо."""
+    if not rows:
+        return '<p class="images-list__empty">Немає завантажених зображень</p>'
+
+    lines = []
+    for image_id, filename, original_name, size, upload_time, file_type in rows:
+        name = html.escape(filename)
+        lines.append(
+            "<tr>"
+            f'<td><a href="/images/{name}" target="_blank">{name}</a></td>'
+            f"<td>{html.escape(original_name)}</td>"
+            f"<td>{size / 1024:.1f}</td>"
+            f"<td>{upload_time:%Y-%m-%d %H:%M:%S}</td>"
+            f"<td>{html.escape(file_type)}</td>"
+            "</tr>"
+        )
+
+    return (
+        '<table class="images-table">'
+        "<thead><tr>"
+        "<th>Назва файлу</th><th>Оригінальна назва</th><th>Розмір (КБ)</th>"
+        "<th>Дата завантаження</th><th>Тип файлу</th>"
+        "</tr></thead>"
+        "<tbody>" + "".join(lines) + "</tbody>"
+        "</table>"
+    )
+
+
 # HTTP обробник
 
 class ImageServerHandler(BaseHTTPRequestHandler):
@@ -215,6 +259,12 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self._send(code, body, "application/json; charset=utf-8")
 
+    def send_page(self, code, template, content):
+        """Підставляє готовий HTML у шаблон зі static/ на місце {{content}}."""
+        with open(os.path.join(STATIC_DIR, template), encoding="utf-8") as f:
+            page = f.read().replace("{{content}}", content)
+        self._send(code, page.encode("utf-8"), "text/html; charset=utf-8")
+
     def send_file(self, base_dir, name, not_found_message):
         """Віддає файл з base_dir і не дає вийти за межі цієї папки."""
         path = resolve_inside(base_dir, name)
@@ -232,6 +282,8 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
         if path in PAGES:
             self.send_file(STATIC_DIR, PAGES[path], "сторінку не знайдено")
+        elif path == "/images-list":
+            self.handle_images_list()
         elif path == "/api/images":
             self.handle_list_images()
         elif path.startswith(("/css/", "/js/", "/img/")):
@@ -252,6 +304,17 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             self.do_GET()
         finally:
             self.head_only = False
+
+    def handle_images_list(self):
+        """Сторінка з таблицею всіх картінок з бази."""
+        try:
+            rows = get_images()
+        except psycopg2.Error as error:
+            log("Помилка", f"не вдалося отримати список зображень з бази ({str(error).strip()})")
+            message = '<p class="images-list__empty">Не вдалося отримати список зображень</p>'
+            self.send_page(500, "images-list.html", message)
+            return
+        self.send_page(200, "images-list.html", render_images_table(rows))
 
     def handle_list_images(self):
         """Віддає JSON зі списком імен картинок, найновіші йдуть першими."""
