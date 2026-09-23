@@ -33,6 +33,8 @@ _base_url = None
 
 def setUpModule():
     global _server, _base_url
+    # Справжньої бази в тестах немає, тому запис метаданих поки просто пропускаємо
+    app.save_metadata = lambda *args: None
     _server = ThreadingHTTPServer(("127.0.0.1", 0), app.ImageServerHandler)
     port = _server.server_address[1]
     _base_url = f"http://127.0.0.1:{port}"

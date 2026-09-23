@@ -131,6 +131,21 @@ def test_connection():
         log("Помилка", f"не вдалося підключитися до бази даних ({str(error).strip()})")
 
 
+def save_metadata(filename, original_name, size, file_type):
+    """Записує дані про збережену картинку в таблицю images."""
+    query = """
+    INSERT INTO images (filename, original_name, size, file_type)
+    VALUES (%s, %s, %s, %s)
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (filename, original_name, size, file_type))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # Доп функції
 
 def resolve_inside(base_dir, name):
@@ -368,13 +383,24 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
         # Розширення ставимо за справжнім форматом, щоб png не росказував що він jpg
         unique_name = uuid.uuid4().hex + FORMAT_TO_EXTENSION[image_format]
+        file_path = os.path.join(IMAGES_DIR, unique_name)
 
         try:
-            with open(os.path.join(IMAGES_DIR, unique_name), "wb") as f:
+            with open(file_path, "wb") as f:
                 f.write(data)
         except OSError:
             log("Помилка", f"не вдалося зберегти файл ({original_name})")
             self.send_json(500, {"error": "не вдалося зберегти файл"})
+            return
+
+        # Файл без запису в базі нікому не потрібен, тому якщо база не відповіла, прибираємо його
+        file_type = FORMAT_TO_EXTENSION[image_format].lstrip(".")
+        try:
+            save_metadata(unique_name, original_name, len(data), file_type)
+        except psycopg2.Error as error:
+            os.remove(file_path)
+            log("Помилка", f"не вдалося зберегти метадані в базу ({original_name}): {str(error).strip()}")
+            self.send_json(500, {"error": "не вдалося зберегти дані про файл"})
             return
 
         log("Успіх", f"зображення {unique_name} завантажено")
