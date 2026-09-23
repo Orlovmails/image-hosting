@@ -6,8 +6,9 @@
    приймає картінки на POST /upload, перевіряє їх і зберігає
    віддає список завантажених файлів на GET /api/images
    записує всі дії в лог app.log
+   зберігає метадані картінок у PostgreSQL
 
-Зі сторонніх бібліотек тут тільки Pillow, все інше дефолтні.
+Зі сторонніх бібліотек тут Pillow і psycopg2, все інше дефолтні.
 """
 
 import io
@@ -20,6 +21,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote
 
+import psycopg2
 from PIL import Image
 
 # Налаштування
@@ -35,6 +37,14 @@ LOGS_DIR = os.environ.get("LOGS_DIR", os.path.join(BASE_DIR, "logs"))
 
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", "8000"))
+
+# Підключення до PostgreSQL. У Docker хост db, це ім'я сервісу з compose.yaml.
+# Без Docker підключаємось до бази на localhost.
+DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_PORT = os.environ.get("DB_PORT", "5432")
+DB_NAME = os.environ.get("DB_NAME", "images_db")
+DB_USER = os.environ.get("DB_USER", "postgres")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "password")
 
 # Обмеження на завантаження
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
@@ -95,6 +105,30 @@ def log(action, message):
     """Пише рядок у лог у форматі з ТЗ: [Дата/час] Дія: повідомлення."""
     level = logging.WARNING if action == "Помилка" else logging.INFO
     logger.log(level, "%s: %s", action, message)
+
+
+# База даних
+
+def get_connection():
+    """Нове з'єднання на кожну операцію, бо сервер багатопотоковий."""
+    return psycopg2.connect(
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT,
+        connect_timeout=5,
+    )
+
+
+def test_connection():
+    """Перевіряє базу при старті. Сервер запускається в будь-якому разі."""
+    try:
+        conn = get_connection()
+        conn.close()
+        log("Успіх", "з'єднання з базою даних успішне")
+    except psycopg2.Error as error:
+        log("Помилка", f"не вдалося підключитися до бази даних ({str(error).strip()})")
 
 
 # Доп функції
@@ -354,6 +388,7 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 def main():
     server = ThreadingHTTPServer((HOST, PORT), ImageServerHandler)
     logger.info("Сервер запущено на http://%s:%s", HOST, PORT)
+    test_connection()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
