@@ -6,6 +6,7 @@
    приймає картінки на POST /upload, перевіряє їх і зберігає
    віддає список завантажених файлів на GET /api/images
    показує таблицю картінок з бази на GET /images-list
+   видаляє картінку і запис про неї на POST /delete/<id>
    записує всі дії в лог app.log
    зберігає метадані картінок у PostgreSQL
 
@@ -174,6 +175,19 @@ def get_images(page):
         conn.close()
 
 
+def delete_image_record(image_id):
+    """Видаляє запис з images. Повертає ім'я файлу або None, якщо такого id немає."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM images WHERE id = %s RETURNING filename", (image_id,))
+        row = cursor.fetchone()
+        conn.commit()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
 # Доп функції
 
 def resolve_inside(base_dir, name):
@@ -219,8 +233,11 @@ def extract_file_data(handler):
 
 # Сторінка списку зображень
 
-def render_images_table(rows):
-    """Робить HTML-таблицю з рядків бази. Оригінальне ім'я прийшло від користувача, тому екрануємо."""
+def render_images_table(rows, page=1):
+    """
+    Робить HTML-таблицю з рядків бази. Оригінальне ім'я прийшло від користувача, тому екрануємо.
+    Номер сторінки передаємо у форму видалення, щоб після неї повернутись туди ж.
+    """
     if not rows:
         return '<p class="images-list__empty">Немає завантажених зображень</p>'
 
@@ -234,6 +251,9 @@ def render_images_table(rows):
             f"<td>{size / 1024:.1f}</td>"
             f"<td>{upload_time:%Y-%m-%d %H:%M:%S}</td>"
             f"<td>{html.escape(file_type)}</td>"
+            f'<td><form method="post" action="/delete/{image_id}?page={page}">'
+            '<button class="delete-btn" type="submit">Видалити</button>'
+            "</form></td>"
             "</tr>"
         )
 
@@ -241,7 +261,7 @@ def render_images_table(rows):
         '<table class="images-table">'
         "<thead><tr>"
         "<th>Назва файлу</th><th>Оригінальна назва</th><th>Розмір (КБ)</th>"
-        "<th>Дата завантаження</th><th>Тип файлу</th>"
+        "<th>Дата завантаження</th><th>Тип файлу</th><th>Дія</th>"
         "</tr></thead>"
         "<tbody>" + "".join(lines) + "</tbody>"
         "</table>"
@@ -308,6 +328,13 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             page = f.read().replace("{{content}}", content)
         self._send(code, page.encode("utf-8"), "text/html; charset=utf-8")
 
+    def redirect(self, location):
+        """303 після POST, щоб браузер відкрив сторінку звичайним GET."""
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def send_file(self, base_dir, name, not_found_message):
         """Віддає файл з base_dir і не дає вийти за межі цієї папки."""
         path = resolve_inside(base_dir, name)
@@ -357,7 +384,7 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             message = '<p class="images-list__empty">Не вдалося отримати список зображень</p>'
             self.send_page(500, "images-list.html", message)
             return
-        content = render_images_table(rows)
+        content = render_images_table(rows, page)
         if rows:
             content += render_pagination(page, pages)
         self.send_page(200, "images-list.html", content)
@@ -408,12 +435,51 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
-        if urlparse(self.path).path == "/upload":
+        url = urlparse(self.path)
+        if url.path == "/upload":
             self.handle_upload(length)
+        elif url.path.startswith("/delete/"):
+            self._discard_body(length)
+            self.handle_delete(url.path[len("/delete/"):], parse_page(url.query))
         else:
             # Тіло дочитуємо навіть для 404, інакше клієнт побачить обрив з'єднання і дулю
             self._discard_body(length)
             self.send_json(404, {"error": "маршрут не знайдено"})
+
+    def handle_delete(self, image_id, page):
+        """Видаляє запис з бази і сам файл, потім повертає на ту ж сторінку списку."""
+        back_link = '<p class="images-list__empty"><a href="/images-list">Повернутися до списку</a></p>'
+
+        if not image_id.isdigit():
+            log("Помилка", f"спроба видалити зображення з некоректним id ({image_id})")
+            message = '<p class="images-list__empty">Зображення не знайдено</p>'
+            self.send_page(404, "images-list.html", message + back_link)
+            return
+
+        try:
+            filename = delete_image_record(int(image_id))
+        except psycopg2.Error as error:
+            log("Помилка", f"не вдалося видалити запис id {image_id} з бази ({str(error).strip()})")
+            message = '<p class="images-list__empty">Не вдалося видалити зображення</p>'
+            self.send_page(500, "images-list.html", message + back_link)
+            return
+
+        if filename is None:
+            log("Помилка", f"зображення з id {image_id} не знайдено в базі")
+            message = f'<p class="images-list__empty">Зображення з id {image_id} не знайдено</p>'
+            self.send_page(404, "images-list.html", message + back_link)
+            return
+
+        # Запис уже видалено, тож навіть якщо файлу немає, користувача повертаємо до списку
+        try:
+            os.remove(os.path.join(IMAGES_DIR, os.path.basename(filename)))
+            log("Успіх", f"зображення {filename} (id {image_id}) видалено")
+        except FileNotFoundError:
+            log("Помилка", f"запис id {image_id} видалено, але файл {filename} відсутній на диску")
+        except OSError as error:
+            log("Помилка", f"запис id {image_id} видалено, але файл {filename} не вдалося видалити ({error})")
+
+        self.redirect(f"/images-list?page={page}")
 
     def _discard_body(self, length, cap=HARD_BODY_LIMIT * 2):
         """
