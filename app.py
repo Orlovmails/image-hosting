@@ -21,7 +21,7 @@ import re
 import sys
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, unquote
+from urllib.parse import parse_qs, urlparse, unquote
 
 import psycopg2
 from PIL import Image
@@ -58,6 +58,9 @@ HARD_BODY_LIMIT = MAX_FILE_SIZE + 1024 * 1024
 # Який формат картинки якому розширенню відповідає.
 # Розширення беремо з реального вмісту, а не з імені файлу, так надійніше.
 FORMAT_TO_EXTENSION = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif"}
+
+# Скільки картинок показуємо на одній сторінці /images-list
+PER_PAGE = 10
 
 # Сторінки сайту маршрут і файл у static/, який на ньому показуємо
 PAGES = {
@@ -148,13 +151,25 @@ def save_metadata(filename, original_name, size, file_type):
         conn.close()
 
 
-def get_images():
-    """Всі записи з таблиці images, останні завантажені першими."""
+def get_images(page):
+    """
+    Одна сторінка записів з таблиці images, останні завантажені першими.
+    Повертає рядки, номер сторінки і скільки всього сторінок.
+    Якщо попросили сторінку за межами списку, віддаємо останню.
+    """
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM images ORDER BY upload_time DESC")
-        return cursor.fetchall()
+        cursor.execute("SELECT COUNT(*) FROM images")
+        total = cursor.fetchone()[0]
+        pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+        page = min(page, pages)
+
+        cursor.execute(
+            "SELECT * FROM images ORDER BY upload_time DESC LIMIT %s OFFSET %s",
+            (PER_PAGE, (page - 1) * PER_PAGE),
+        )
+        return cursor.fetchall(), page, pages
     finally:
         conn.close()
 
@@ -233,6 +248,34 @@ def render_images_table(rows):
     )
 
 
+def render_pagination(page, pages):
+    """Кнопки між сторінками. На краях списку кнопка вимкнена."""
+    if page > 1:
+        prev_btn = f'<a class="pagination__btn" href="/images-list?page={page - 1}">Попередня сторінка</a>'
+    else:
+        prev_btn = '<button class="pagination__btn" disabled>Попередня сторінка</button>'
+
+    if page < pages:
+        next_btn = f'<a class="pagination__btn" href="/images-list?page={page + 1}">Наступна сторінка</a>'
+    else:
+        next_btn = '<button class="pagination__btn" disabled>Наступна сторінка</button>'
+
+    return (
+        '<nav class="pagination">'
+        f'{prev_btn}<span class="pagination__info">Сторінка {page} з {pages}</span>{next_btn}'
+        "</nav>"
+    )
+
+
+def parse_page(query):
+    """Номер сторінки з ?page=N. Все, що не є додатним числом, вважаємо першою сторінкою."""
+    value = parse_qs(query).get("page", ["1"])[0]
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 1
+
+
 # HTTP обробник
 
 class ImageServerHandler(BaseHTTPRequestHandler):
@@ -283,7 +326,7 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         if path in PAGES:
             self.send_file(STATIC_DIR, PAGES[path], "сторінку не знайдено")
         elif path == "/images-list":
-            self.handle_images_list()
+            self.handle_images_list(parse_page(urlparse(self.path).query))
         elif path == "/api/images":
             self.handle_list_images()
         elif path.startswith(("/css/", "/js/", "/img/")):
@@ -305,16 +348,19 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         finally:
             self.head_only = False
 
-    def handle_images_list(self):
-        """Сторінка з таблицею всіх картінок з бази."""
+    def handle_images_list(self, page):
+        """Сторінка з таблицею картінок з бази, по PER_PAGE на сторінку."""
         try:
-            rows = get_images()
+            rows, page, pages = get_images(page)
         except psycopg2.Error as error:
             log("Помилка", f"не вдалося отримати список зображень з бази ({str(error).strip()})")
             message = '<p class="images-list__empty">Не вдалося отримати список зображень</p>'
             self.send_page(500, "images-list.html", message)
             return
-        self.send_page(200, "images-list.html", render_images_table(rows))
+        content = render_images_table(rows)
+        if rows:
+            content += render_pagination(page, pages)
+        self.send_page(200, "images-list.html", content)
 
     def handle_list_images(self):
         """Віддає JSON зі списком імен картинок, найновіші йдуть першими."""
