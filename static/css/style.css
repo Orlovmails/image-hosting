@@ -357,16 +357,86 @@ body {
 .images-table {
     width: 100%;
     border-collapse: collapse;
+    background-color: white;
+    border-radius: 12px;
+    overflow: hidden;
+    font-size: 14px;
 }
 
 .images-table th,
 .images-table td {
-    padding: 10px;
+    padding: 14px 16px;
     text-align: left;
+    border-bottom: 1px solid #eef0f5;
+}
+
+.images-table th {
+    color: #8a96b1;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.images-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.images-table tbody tr:hover {
+    background-color: #f7f9ff;
+}
+
+.images-table a {
+    color: #0060ff;
+    font-weight: 500;
+}
+
+/* Дата не має переноситись посередині */
+.images-table td:nth-child(4) {
+    white-space: nowrap;
 }
 
 .images-list__empty {
     text-align: center;
     margin-top: 50px;
     color: rgb(11, 11, 11);
+}
+
+/* Кнопки між сторінками */
+.pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 20px;
+    padding-top: 30px;
+}
+
+.pagination__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 180px;
+    height: 40px;
+    padding: 0 16px;
+    border: none;
+    border-radius: 7px;
+    background-color: rgb(0, 96, 255);
+    color: white;
+    font-family: inherit;
+    font-size: 14px;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.pagination__btn:hover {
+    background-color: rgb(105, 141, 250);
+}
+
+.pagination__btn:disabled {
+    background-color: rgb(173, 192, 248);
+    cursor: default;
+}
+
+.pagination__info {
+    color: #8a96b1;
+    font-size: 14px;
+    white-space: nowrap;
 }
