@@ -6,6 +6,7 @@
 щоб тести не чіпали робочі дані.
 """
 
+import http.client
 import io
 import json
 import os
@@ -15,6 +16,8 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+import uuid
+from datetime import datetime, timedelta
 from http.server import ThreadingHTTPServer
 from unittest import mock
 
@@ -26,6 +29,10 @@ os.environ["IMAGES_DIR"] = os.path.join(_TMP, "images")
 os.environ["LOGS_DIR"] = os.path.join(_TMP, "logs")
 
 import app  # noqa: E402 імпортуємо саме тут, після підстановки папок
+
+# Справжні функції бази, до підміни. Потрібні в DatabaseQueryTests.
+ORIGINAL_GET_IMAGES = app.get_images
+ORIGINAL_DELETE_IMAGE_RECORD = app.delete_image_record
 import psycopg2  # noqa: E402
 from PIL import Image  # noqa: E402
 
@@ -33,22 +40,60 @@ _server = None
 _base_url = None
 
 # Фейкова база: справжнього Postgres у тестах немає, тому рядки таблиці images
-# просто складаємо в список, з полями в тому ж порядку, що й у save_metadata
+# просто складаємо в список. Функції нижче підміняють ті, що ходять у базу.
 fake_rows = []
+_next_id = [1]
 
 
-def fake_save_metadata(filename, original_name, size, file_type):
+def fake_save_metadata(filename, original_name, size, file_type, upload_time=None):
     fake_rows.append({
+        "id": _next_id[0],
         "filename": filename,
         "original_name": original_name,
         "size": size,
+        "upload_time": upload_time or datetime.now(),
         "file_type": file_type,
     })
+    _next_id[0] += 1
+
+
+def fake_get_images(page):
+    rows = sorted(fake_rows, key=lambda r: r["upload_time"], reverse=True)
+    pages = max(1, (len(rows) + app.PER_PAGE - 1) // app.PER_PAGE)
+    page = min(page, pages)
+    start = (page - 1) * app.PER_PAGE
+    result = [
+        (r["id"], r["filename"], r["original_name"], r["size"], r["upload_time"], r["file_type"])
+        for r in rows[start:start + app.PER_PAGE]
+    ]
+    return result, page, pages
+
+
+def fake_delete_image_record(image_id):
+    for row in fake_rows:
+        if row["id"] == image_id:
+            fake_rows.remove(row)
+            return row["filename"]
+    return None
+
+
+def fill_fake_rows(count, with_files=False):
+    """Кладе в фейкову базу count записів, кожен наступний на хвилину новіший."""
+    fake_rows.clear()
+    start = datetime(2025, 1, 24, 15, 30, 0)
+    for i in range(count):
+        filename = uuid.uuid4().hex + ".png"
+        if with_files:
+            with open(os.path.join(app.IMAGES_DIR, filename), "wb") as f:
+                f.write(make_image("PNG"))
+        fake_save_metadata(filename, f"pic_{i + 1}.png", 2048, "png", start + timedelta(minutes=i))
 
 
 def setUpModule():
     global _server, _base_url
     app.save_metadata = fake_save_metadata
+    app.get_images = fake_get_images
+    app.delete_image_record = fake_delete_image_record
     _server = ThreadingHTTPServer(("127.0.0.1", 0), app.ImageServerHandler)
     port = _server.server_address[1]
     _base_url = f"http://127.0.0.1:{port}"
@@ -105,6 +150,25 @@ def http_request(path, method="GET"):
 
 def http_get(path):
     return http_request(path)
+
+
+def post_no_redirect(path):
+    """POST без переходу за редиректом, щоб побачити сам 303 і Location."""
+    conn = http.client.HTTPConnection(_base_url[len("http://"):])
+    conn.request("POST", path, body=b"", headers={"Content-Length": "0"})
+    resp = conn.getresponse()
+    body = resp.read()
+    conn.close()
+    return resp.status, resp.getheader("Location"), body.decode("utf-8")
+
+
+def last_log_line():
+    with open(os.path.join(app.LOGS_DIR, "app.log"), encoding="utf-8") as f:
+        return f.read().strip().splitlines()[-1]
+
+
+def count_rows(page_html):
+    return page_html.count("<tr><td>")
 
 
 class UploadTests(unittest.TestCase):
@@ -389,6 +453,229 @@ class StaticFileTests(unittest.TestCase):
         self.assertEqual(code, 404)
         self.assertNotIn(b"BASE_DIR", body)
 
+
+class ImagesListTests(unittest.TestCase):
+    def get_page(self, query=""):
+        code, body = http_get("/images-list" + query)
+        self.assertEqual(code, 200)
+        return body.decode("utf-8")
+
+    def test_empty_list_message(self):
+        fill_fake_rows(0)
+        page = self.get_page()
+        self.assertIn("Немає завантажених зображень", page)
+        self.assertNotIn("<table", page)
+        self.assertNotIn("pagination", page)
+
+    def test_row_has_all_columns_and_link(self):
+        fill_fake_rows(1)
+        row = fake_rows[0]
+        page = self.get_page()
+        self.assertIn(f'href="/images/{row["filename"]}"', page)
+        self.assertIn("pic_1.png", page)
+        self.assertIn("<td>2.0</td>", page)
+        self.assertIn("2025-01-24 15:30:00", page)
+        self.assertIn("<td>png</td>", page)
+
+    def test_newest_first(self):
+        fill_fake_rows(3)
+        page = self.get_page()
+        self.assertLess(page.index("pic_3.png"), page.index("pic_2.png"))
+        self.assertLess(page.index("pic_2.png"), page.index("pic_1.png"))
+
+    def test_original_name_is_escaped(self):
+        fill_fake_rows(1)
+        fake_rows[0]["original_name"] = "<script>alert(1)</script>.png"
+        page = self.get_page()
+        self.assertIn("&lt;script&gt;", page)
+        self.assertNotIn("<script>alert", page)
+
+    def test_ten_records_fit_one_page(self):
+        fill_fake_rows(10)
+        page = self.get_page()
+        self.assertEqual(count_rows(page), 10)
+        self.assertIn("Сторінка 1 з 1", page)
+        self.assertIn("disabled>Попередня сторінка", page)
+        self.assertIn("disabled>Наступна сторінка", page)
+
+    def test_eleven_records_make_two_pages(self):
+        fill_fake_rows(11)
+        first = self.get_page("?page=1")
+        self.assertEqual(count_rows(first), 10)
+        self.assertIn("disabled>Попередня сторінка", first)
+        self.assertIn('href="/images-list?page=2"', first)
+
+        second = self.get_page("?page=2")
+        self.assertEqual(count_rows(second), 1)
+        self.assertIn("pic_1.png", second)
+        self.assertIn('href="/images-list?page=1"', second)
+        self.assertIn("disabled>Наступна сторінка", second)
+
+    def test_middle_page_has_both_buttons(self):
+        fill_fake_rows(25)
+        page = self.get_page("?page=2")
+        self.assertIn("Сторінка 2 з 3", page)
+        self.assertIn('href="/images-list?page=1"', page)
+        self.assertIn('href="/images-list?page=3"', page)
+        self.assertNotIn("disabled", page)
+
+    def test_bad_page_values(self):
+        fill_fake_rows(25)
+        for query in ("?page=abc", "?page=0", "?page=-3", "?page="):
+            self.assertIn("Сторінка 1 з 3", self.get_page(query), query)
+        page = self.get_page("?page=999")
+        self.assertIn("Сторінка 3 з 3", page)
+        self.assertEqual(count_rows(page), 5)
+
+    def test_rows_have_delete_buttons(self):
+        fill_fake_rows(11)
+        page = self.get_page("?page=2")
+        row_id = fake_rows[0]["id"]
+        self.assertIn(f'action="/delete/{row_id}?page=2"', page)
+        self.assertIn(">Видалити</button>", page)
+
+    def test_db_error_returns_500(self):
+        error = psycopg2.OperationalError("база не відповідає")
+        with mock.patch.object(app, "get_images", side_effect=error):
+            code, body = http_get("/images-list")
+        self.assertEqual(code, 500)
+        self.assertIn("Не вдалося отримати список зображень", body.decode("utf-8"))
+        self.assertIn("база не відповідає", last_log_line())
+
+
+class FakeCursor:
+    """Запам'ятовує SQL-запити і віддає наперед задані відповіді."""
+
+    def __init__(self, fetchone_results):
+        self.queries = []
+        self.fetchone_results = list(fetchone_results)
+
+    def execute(self, query, params=None):
+        self.queries.append((" ".join(query.split()), params))
+
+    def fetchone(self):
+        return self.fetchone_results.pop(0)
+
+    def fetchall(self):
+        return []
+
+
+class FakeConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.committed = False
+        self.closed = False
+
+    def cursor(self):
+        return self._cursor
+
+    def commit(self):
+        self.committed = True
+
+    def close(self):
+        self.closed = True
+
+
+class DatabaseQueryTests(unittest.TestCase):
+    """Справжні get_images і delete_image_record, тільки з фейковим з'єднанням."""
+
+    def run_get_images(self, total, page):
+        cursor = FakeCursor([(total,)])
+        conn = FakeConnection(cursor)
+        with mock.patch.object(app, "get_connection", return_value=conn):
+            result = ORIGINAL_GET_IMAGES(page)
+        self.assertTrue(conn.closed)
+        return result, cursor.queries[-1]
+
+    def test_uses_limit_and_offset(self):
+        (rows, page, pages), (query, params) = self.run_get_images(25, 2)
+        self.assertEqual(query, "SELECT * FROM images ORDER BY upload_time DESC LIMIT %s OFFSET %s")
+        self.assertEqual(params, (10, 10))
+        self.assertEqual((page, pages), (2, 3))
+
+    def test_page_after_end_becomes_last(self):
+        (rows, page, pages), (query, params) = self.run_get_images(25, 999)
+        self.assertEqual(params, (10, 20))
+        self.assertEqual((page, pages), (3, 3))
+
+    def test_empty_table(self):
+        (rows, page, pages), (query, params) = self.run_get_images(0, 1)
+        self.assertEqual(params, (10, 0))
+        self.assertEqual((page, pages), (1, 1))
+
+    def run_delete(self, fetchone_result):
+        cursor = FakeCursor([fetchone_result])
+        conn = FakeConnection(cursor)
+        with mock.patch.object(app, "get_connection", return_value=conn):
+            result = ORIGINAL_DELETE_IMAGE_RECORD(7)
+        self.assertTrue(conn.committed)
+        self.assertTrue(conn.closed)
+        self.assertEqual(cursor.queries[0], ("DELETE FROM images WHERE id = %s RETURNING filename", (7,)))
+        return result
+
+    def test_delete_returns_filename(self):
+        self.assertEqual(self.run_delete(("abc.png",)), "abc.png")
+
+    def test_delete_unknown_id_returns_none(self):
+        self.assertIsNone(self.run_delete(None))
+
+
+class DeleteByIdTests(unittest.TestCase):
+    def setUp(self):
+        fill_fake_rows(3, with_files=True)
+
+    def test_delete_removes_record_and_file(self):
+        row = fake_rows[0]
+        path = os.path.join(app.IMAGES_DIR, row["filename"])
+        code, location, _ = post_no_redirect(f"/delete/{row['id']}?page=2")
+        self.assertEqual(code, 303)
+        self.assertEqual(location, "/images-list?page=2")
+        self.assertNotIn(row, fake_rows)
+        self.assertFalse(os.path.exists(path))
+        self.assertIn("Успіх", last_log_line())
+        self.assertIn(row["filename"], last_log_line())
+
+    def test_list_updated_after_delete(self):
+        row = fake_rows[0]
+        post_no_redirect(f"/delete/{row['id']}")
+        page = http_get("/images-list")[1].decode("utf-8")
+        self.assertNotIn(row["filename"], page)
+        self.assertEqual(count_rows(page), 2)
+
+    def test_unknown_id_returns_404(self):
+        code, _, body = post_no_redirect("/delete/99999")
+        self.assertEqual(code, 404)
+        self.assertIn("Зображення з id 99999 не знайдено", body)
+        self.assertEqual(len(fake_rows), 3)
+        self.assertIn("Помилка", last_log_line())
+
+    def test_bad_id_returns_404(self):
+        code, _, _ = post_no_redirect("/delete/abc")
+        self.assertEqual(code, 404)
+        self.assertEqual(len(fake_rows), 3)
+
+    def test_missing_file_is_logged(self):
+        row = fake_rows[0]
+        os.remove(os.path.join(app.IMAGES_DIR, row["filename"]))
+        code, location, _ = post_no_redirect(f"/delete/{row['id']}")
+        self.assertEqual(code, 303)
+        self.assertNotIn(row, fake_rows)
+        self.assertIn("відсутній на диску", last_log_line())
+
+    def test_db_error_returns_500(self):
+        row = fake_rows[0]
+        error = psycopg2.OperationalError("база не відповідає")
+        with mock.patch.object(app, "delete_image_record", side_effect=error):
+            code, _, body = post_no_redirect(f"/delete/{row['id']}")
+        self.assertEqual(code, 500)
+        self.assertIn("Не вдалося видалити зображення", body)
+        self.assertTrue(os.path.exists(os.path.join(app.IMAGES_DIR, row["filename"])))
+
+    def test_get_does_not_delete(self):
+        row = fake_rows[0]
+        code, _ = http_get(f"/delete/{row['id']}")
+        self.assertEqual(code, 404)
+        self.assertIn(row, fake_rows)
 
 
 class PathSafetyTests(unittest.TestCase):
