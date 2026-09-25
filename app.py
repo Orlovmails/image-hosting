@@ -4,7 +4,6 @@
 Що він робить:
    віддає сторінки сайту з папки static/
    приймає картінки на POST /upload, перевіряє їх і зберігає
-   віддає список завантажених файлів на GET /api/images
    показує таблицю картінок з бази на GET /images-list
    видаляє картінку і запис про неї на POST /delete/<id>
    записує всі дії в лог app.log
@@ -67,9 +66,10 @@ PER_PAGE = 10
 PAGES = {
     "/": "index.html",
     "/upload": "upload.html",
-    "/gallery": "images.html",
-    "/images/": "images.html",  
 }
+
+# Старі адреси каталогу. Тепер список живе на /images-list, а ці просто перенаправляють туди.
+OLD_CATALOG_PATHS = ("/gallery", "/images/")
 
 # Типи вмісту для статичних файлів
 CONTENT_TYPES = {
@@ -332,7 +332,7 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         self._send(code, page.encode("utf-8"), "text/html; charset=utf-8")
 
     def redirect(self, location):
-        """303 після POST, щоб браузер відкрив сторінку звичайним GET."""
+        """303: браузер відкриває вказану адресу звичайним GET (і після POST теж)."""
         self.send_response(303)
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
@@ -355,10 +355,10 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
         if path in PAGES:
             self.send_file(STATIC_DIR, PAGES[path], "сторінку не знайдено")
+        elif path in OLD_CATALOG_PATHS:
+            self.redirect("/images-list")
         elif path == "/images-list":
             self.handle_images_list(parse_page(urlparse(self.path).query))
-        elif path == "/api/images":
-            self.handle_list_images()
         elif path.startswith(("/css/", "/js/", "/img/")):
             self.send_file(STATIC_DIR, path, "файл не знайдено")
         elif path.startswith("/images/"):
@@ -391,48 +391,6 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         if rows:
             content += render_pagination(page, pages)
         self.send_page(200, "images-list.html", content)
-
-    def handle_list_images(self):
-        """Віддає JSON зі списком імен картинок, найновіші йдуть першими."""
-        try:
-            entries = []
-            for name in os.listdir(IMAGES_DIR):
-                full = os.path.join(IMAGES_DIR, name)
-                ext = os.path.splitext(name)[1].lower()
-                if os.path.isfile(full) and ext in ALLOWED_EXTENSIONS:
-                    entries.append((os.path.getmtime(full), name))
-            entries.sort(reverse=True)
-            self.send_json(200, [name for _, name in entries])
-        except OSError:
-            self.send_json(500, {"error": "не вдалося прочитати каталог зображень"})
-
-    # Маршрут DELETE
-
-    def do_DELETE(self):
-        path = urlparse(self.path).path
-        if path.startswith("/api/images/"):
-            self.handle_delete_image(unquote(path[len("/api/images/"):]))
-        else:
-            self.send_json(404, {"error": "маршрут не знайдено"})
-
-    def handle_delete_image(self, name):
-        """Видаляє картинку з папки images. Ім'я перевіряємо, щоб не вилізти за межі."""
-        path = resolve_inside(IMAGES_DIR, name)
-        if path is None:
-            log("Помилка", f"спроба видалити неіснуючий файл ({name})")
-            self.send_json(404, {"error": "зображення не знайдено"})
-            return
-
-        try:
-            os.remove(path)
-        except OSError:
-            log("Помилка", f"не вдалося видалити файл ({name})")
-            self.send_json(500, {"error": "не вдалося видалити файл"})
-            return
-
-        deleted_name = os.path.basename(path)
-        log("Успіх", f"зображення {deleted_name} видалено")
-        self.send_json(200, {"deleted": deleted_name})
 
     # Маршрути POST
 

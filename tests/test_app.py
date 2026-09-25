@@ -217,9 +217,9 @@ class UploadTests(unittest.TestCase):
     def test_uploaded_appears_in_listing(self):
         code, res = post_upload("pic.png", make_image("PNG"), "image/png")
         name = res["id"]
-        code, body = http_get("/api/images")
+        code, body = http_get("/images-list")
         self.assertEqual(code, 200)
-        self.assertIn(name, json.loads(body))
+        self.assertIn(f'href="/images/{name}"', body.decode("utf-8"))
 
     def test_reject_text_disguised_as_jpg(self):
         code, res = post_upload("fake.jpg", b"this is not an image", "image/jpeg")
@@ -386,33 +386,25 @@ class ExtractFileDataTests(unittest.TestCase):
 
 
 
-class DeleteTests(unittest.TestCase):
-    def test_delete_removes_file(self):
-        code, res = post_upload("pic.png", make_image("PNG"), "image/png")
-        name = res["id"]
+class OldCatalogTests(unittest.TestCase):
+    """Старий каталог і JSON API прибрані, список тепер тільки на /images-list."""
 
-        code, body = http_request("/api/images/" + name, method="DELETE")
-        self.assertEqual(code, 200)
-        self.assertEqual(json.loads(body)["deleted"], name)
+    def test_old_catalog_paths_redirect_to_images_list(self):
+        for path in ("/images/", "/gallery"):
+            conn = http.client.HTTPConnection(_base_url[len("http://"):])
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+            self.assertEqual(resp.status, 303, path)
+            self.assertEqual(resp.getheader("Location"), "/images-list", path)
 
-        # файл більше не віддається і зник зі списку
-        self.assertEqual(http_get("/images/" + name)[0], 404)
-        self.assertNotIn(name, json.loads(http_get("/api/images")[1]))
+    def test_old_json_api_removed(self):
+        self.assertEqual(http_get("/api/images")[0], 404)
 
-    def test_delete_missing_file_returns_404(self):
-        code, _ = http_request("/api/images/nemaje.png", method="DELETE")
-        self.assertEqual(code, 404)
-
-    def test_delete_cannot_escape_images_dir(self):
-        """Спробу видалити файл за межами папки з картинками треба відхиляти."""
-        outside = os.path.join(os.environ["LOGS_DIR"], "app.log")
-        code, _ = http_request("/api/images/..%2Flogs%2Fapp.log", method="DELETE")
-        self.assertEqual(code, 404)
-        self.assertTrue(os.path.exists(outside))
-
-    def test_delete_unknown_route_returns_404(self):
-        code, _ = http_request("/api/nope/x.png", method="DELETE")
-        self.assertEqual(code, 404)
+    def test_old_delete_method_not_supported(self):
+        code, _ = http_request("/api/images/pic.png", method="DELETE")
+        self.assertEqual(code, 501)
 
 
 class PageTests(unittest.TestCase):
@@ -426,17 +418,15 @@ class PageTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIn(b"<html", body.lower())
 
-    def test_home_page_links_to_upload_and_catalog(self):
-        """За ТЗ на головній мають бути посилання на /upload і на каталог /images/."""
+    def test_home_page_links_to_upload_and_images_list(self):
         code, body = http_get("/")
         self.assertIn(b'data-href="/upload"', body)
-        self.assertIn(b'data-href="/images/"', body)
+        self.assertIn(b'data-href="/images-list"', body)
 
-    def test_catalog_page_at_images_slash(self):
-        """За ТЗ каталог зображень має відкриватись за адресою /images/."""
+    def test_images_list_page_follows_redirect_from_images_slash(self):
         code, body = http_get("/images/")
         self.assertEqual(code, 200)
-        self.assertIn(b"<html", body.lower())
+        self.assertIn("Завантажені зображення", body.decode("utf-8"))
 
     def test_head_returns_headers_without_body(self):
         code, body = http_request("/", method="HEAD")

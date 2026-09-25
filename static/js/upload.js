@@ -120,10 +120,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Перехід на каталог зображень
+    // Перехід на список зображень
     if (imagesButton) {
         imagesButton.addEventListener('click', () => {
-            window.location.href = '/images/';
+            window.location.href = '/images-list';
         });
     }
 
