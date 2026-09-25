@@ -138,16 +138,19 @@ def test_connection():
 
 
 def save_metadata(filename, original_name, size, file_type):
-    """Записує дані про збережену картинку в таблицю images."""
+    """Записує дані про збережену картинку в таблицю images і повертає id нового запису."""
     query = """
     INSERT INTO images (filename, original_name, size, file_type)
     VALUES (%s, %s, %s, %s)
+    RETURNING id
     """
     conn = get_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(query, (filename, original_name, size, file_type))
+        image_id = cursor.fetchone()[0]
         conn.commit()
+        return image_id
     finally:
         conn.close()
 
@@ -571,14 +574,14 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         # Файл без запису в базі нікому не потрібен, тому якщо база не відповіла, прибираємо його
         file_type = FORMAT_TO_EXTENSION[image_format].lstrip(".")
         try:
-            save_metadata(unique_name, original_name, len(data), file_type)
+            image_id = save_metadata(unique_name, original_name, len(data), file_type)
         except psycopg2.Error as error:
             os.remove(file_path)
             log("Помилка", f"не вдалося зберегти метадані в базу ({original_name}): {str(error).strip()}")
             self.send_json(500, {"error": "не вдалося зберегти дані про файл"})
             return
 
-        log("Успіх", f"зображення {unique_name} завантажено")
+        log("Успіх", f"зображення {unique_name} (id {image_id}) завантажено")
         self.send_json(200, {"id": unique_name, "url": "/images/" + unique_name})
 
     def log_message(self, format, *args):

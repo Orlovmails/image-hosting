@@ -31,6 +31,7 @@ os.environ["LOGS_DIR"] = os.path.join(_TMP, "logs")
 import app  # noqa: E402 імпортуємо саме тут, після підстановки папок
 
 # Справжні функції бази, до підміни. Потрібні в DatabaseQueryTests.
+ORIGINAL_SAVE_METADATA = app.save_metadata
 ORIGINAL_GET_IMAGES = app.get_images
 ORIGINAL_DELETE_IMAGE_RECORD = app.delete_image_record
 import psycopg2  # noqa: E402
@@ -46,8 +47,9 @@ _next_id = [1]
 
 
 def fake_save_metadata(filename, original_name, size, file_type, upload_time=None):
+    image_id = _next_id[0]
     fake_rows.append({
-        "id": _next_id[0],
+        "id": image_id,
         "filename": filename,
         "original_name": original_name,
         "size": size,
@@ -55,6 +57,7 @@ def fake_save_metadata(filename, original_name, size, file_type, upload_time=Non
         "file_type": file_type,
     })
     _next_id[0] += 1
+    return image_id
 
 
 def fake_get_images(page):
@@ -288,6 +291,10 @@ class MetadataTests(unittest.TestCase):
         row = self.upload_and_get_row("fake_name.jpg", make_image("PNG"), "image/jpeg")
         self.assertEqual(row["file_type"], "png")
         self.assertTrue(row["filename"].endswith(".png"))
+
+    def test_new_id_is_logged(self):
+        row = self.upload_and_get_row("with_id.png", make_image("PNG"), "image/png")
+        self.assertIn(f"{row['filename']} (id {row['id']}) завантажено", last_log_line())
 
     def test_rejected_file_not_saved_to_db(self):
         count = len(fake_rows)
@@ -577,7 +584,7 @@ class FakeConnection:
 
 
 class DatabaseQueryTests(unittest.TestCase):
-    """Справжні get_images і delete_image_record, тільки з фейковим з'єднанням."""
+    """Справжні функції бази, тільки з фейковим з'єднанням."""
 
     def run_get_images(self, total, page):
         cursor = FakeCursor([(total,)])
@@ -612,6 +619,18 @@ class DatabaseQueryTests(unittest.TestCase):
         self.assertTrue(conn.closed)
         self.assertEqual(cursor.queries[0], ("DELETE FROM images WHERE id = %s RETURNING filename", (7,)))
         return result
+
+    def test_insert_returns_new_id(self):
+        cursor = FakeCursor([(42,)])
+        conn = FakeConnection(cursor)
+        with mock.patch.object(app, "get_connection", return_value=conn):
+            image_id = ORIGINAL_SAVE_METADATA("a.png", "cat.png", 1234, "png")
+        self.assertEqual(image_id, 42)
+        self.assertTrue(conn.committed)
+        self.assertTrue(conn.closed)
+        query, params = cursor.queries[0]
+        self.assertTrue(query.endswith("RETURNING id"))
+        self.assertEqual(params, ("a.png", "cat.png", 1234, "png"))
 
     def test_delete_returns_filename(self):
         self.assertEqual(self.run_delete(("abc.png",)), "abc.png")
