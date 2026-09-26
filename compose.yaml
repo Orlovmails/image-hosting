@@ -6,6 +6,7 @@ services:
       IMAGES_DIR: /images
       LOGS_DIR: /logs
       PORT: "8000"
+      TZ: Europe/Kyiv          # час у app.log київський, а не UTC
       DB_HOST: db
       DB_PORT: "5432"
       DB_NAME: images_db
@@ -50,6 +51,9 @@ services:
   db:
     image: postgres:17-alpine
     container_name: postgres_container
+    # Часовий пояс бази. Від нього залежить upload_time (CURRENT_TIMESTAMP).
+    # Через command, бо TZ діє тільки при першому створенні тому db_data.
+    command: ["postgres", "-c", "timezone=Europe/Kyiv"]
     environment:
       POSTGRES_DB: images_db
       POSTGRES_USER: postgres
