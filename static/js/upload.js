@@ -1,6 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
     const fileUpload = document.getElementById('file-upload');
-    const imagesButton = document.getElementById('images-tab-btn');
     const dropzone = document.querySelector('.upload__dropzone');
     const currentUploadInput = document.querySelector('.upload__input');
     const copyButton = document.querySelector('.upload__copy');
@@ -117,21 +116,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     setTimeout(() => { copyButton.textContent = 'КОПІЮВАТИ'; }, 2000);
                 }).catch(err => console.error('Не вдалося скопіювати:', err));
             }
-        });
-    }
-
-    // Перехід на список зображень
-    if (imagesButton) {
-        imagesButton.addEventListener('click', () => {
-            window.location.href = '/images-list';
-        });
-    }
-
-    // Повернення на головну сторінку
-    const homeButton = document.getElementById('home-btn');
-    if (homeButton) {
-        homeButton.addEventListener('click', () => {
-            window.location.href = '/';
         });
     }
 

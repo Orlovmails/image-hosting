@@ -46,6 +46,7 @@ body {
     white-space: nowrap;
     border: none;
     border-radius: 7px;
+    text-decoration: none;
     cursor: pointer;
 }
 
@@ -106,6 +107,7 @@ body {
     font-size: 20px;
     font-weight: bold;
     color: rgb(173, 192, 248); /* Неактивный цвет по умолчанию */
+    cursor: pointer; /* all: unset прибирає курсор-руку, повертаємо */
 }
 
 .upload__tab--active {

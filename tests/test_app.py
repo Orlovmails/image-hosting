@@ -420,8 +420,9 @@ class PageTests(unittest.TestCase):
 
     def test_home_page_links_to_upload_and_images_list(self):
         code, body = http_get("/")
-        self.assertIn(b'data-href="/upload"', body)
-        self.assertIn(b'data-href="/images-list"', body)
+        self.assertIn(b'href="/upload"', body)
+        self.assertIn(b'href="/images-list"', body)
+        self.assertNotIn(b"data-href", body)
 
     def test_images_list_page_follows_redirect_from_images_slash(self):
         code, body = http_get("/images/")
