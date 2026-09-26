@@ -43,8 +43,11 @@ def main():
     filename = f"backup_{datetime.now():%Y-%m-%d_%H%M%S}.sql"
     path = os.path.join(BACKUPS_DIR, filename)
 
-    # Без -t, як у команді з ТЗ: з ним docker додає у вивід \r і дамп псується
-    command = ["docker", "exec", DB_CONTAINER, "pg_dump", "-U", DB_USER, DB_NAME]
+    # Без -t, хоч у команді з ТЗ він є: з ним docker додає у вивід \r і дамп псується.
+    # --clean --if-exists: дамп спершу видаляє таблицю, тому відновлення в робочу базу
+    # її перезаписує, а не падає на "already exists" і дублікатах id.
+    command = ["docker", "exec", DB_CONTAINER, "pg_dump", "--clean", "--if-exists",
+               "-U", DB_USER, DB_NAME]
     try:
         with open(path, "wb") as f:
             result = subprocess.run(command, stdout=f, stderr=subprocess.PIPE)
