@@ -10,6 +10,8 @@ images/*
 !images/.gitkeep
 logs/*
 !logs/.gitkeep
+backups/*
+!backups/.gitkeep
 
 # Системні файли та редактори
 .DS_Store
