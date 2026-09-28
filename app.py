@@ -180,7 +180,7 @@ def get_images(limit, offset):
         conn.close()
 
 
-def delete_image_record(image_id):
+def delete_metadata(image_id):
     """Видаляє запис з images. Повертає ім'я файлу або None, якщо такого id немає."""
     conn = get_connection()
     try:
@@ -431,7 +431,7 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            filename = delete_image_record(int(image_id))
+            filename = delete_metadata(int(image_id))
         except psycopg2.Error as error:
             log("Помилка", f"не вдалося видалити запис id {image_id} з бази ({str(error).strip()})")
             message = '<p class="images-list__empty">Не вдалося видалити зображення</p>'

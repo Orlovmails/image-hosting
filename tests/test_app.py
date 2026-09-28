@@ -34,7 +34,7 @@ import app  # noqa: E402 імпортуємо саме тут, після під
 ORIGINAL_SAVE_METADATA = app.save_metadata
 ORIGINAL_COUNT_IMAGES = app.count_images
 ORIGINAL_GET_IMAGES = app.get_images
-ORIGINAL_DELETE_IMAGE_RECORD = app.delete_image_record
+ORIGINAL_DELETE_METADATA = app.delete_metadata
 import psycopg2  # noqa: E402
 from PIL import Image  # noqa: E402
 
@@ -73,7 +73,7 @@ def fake_get_images(limit, offset):
     ]
 
 
-def fake_delete_image_record(image_id):
+def fake_delete_metadata(image_id):
     for row in fake_rows:
         if row["id"] == image_id:
             fake_rows.remove(row)
@@ -98,7 +98,7 @@ def setUpModule():
     app.save_metadata = fake_save_metadata
     app.count_images = fake_count_images
     app.get_images = fake_get_images
-    app.delete_image_record = fake_delete_image_record
+    app.delete_metadata = fake_delete_metadata
     _server = ThreadingHTTPServer(("127.0.0.1", 0), app.ImageServerHandler)
     port = _server.server_address[1]
     _base_url = f"http://127.0.0.1:{port}"
@@ -603,7 +603,7 @@ class DatabaseQueryTests(unittest.TestCase):
         cursor = FakeCursor([fetchone_result])
         conn = FakeConnection(cursor)
         with mock.patch.object(app, "get_connection", return_value=conn):
-            result = ORIGINAL_DELETE_IMAGE_RECORD(7)
+            result = ORIGINAL_DELETE_METADATA(7)
         self.assertTrue(conn.committed)
         self.assertTrue(conn.closed)
         self.assertEqual(cursor.queries[0], ("DELETE FROM images WHERE id = %s RETURNING filename", (7,)))
@@ -692,7 +692,7 @@ class DeleteByIdTests(unittest.TestCase):
     def test_db_error_returns_500(self):
         row = fake_rows[0]
         error = psycopg2.OperationalError("база не відповідає")
-        with mock.patch.object(app, "delete_image_record", side_effect=error):
+        with mock.patch.object(app, "delete_metadata", side_effect=error):
             code, _, body = post_no_redirect(f"/delete/{row['id']}")
         self.assertEqual(code, 500)
         self.assertIn("Не вдалося видалити зображення", body)
