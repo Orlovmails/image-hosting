@@ -7,11 +7,12 @@ services:
       LOGS_DIR: /logs
       PORT: "8000"
       TZ: Europe/Kyiv          # час у app.log київський, а не UTC
-      DB_HOST: db
-      DB_PORT: "5432"
-      DB_NAME: images_db
-      DB_USER: postgres
-      DB_PASSWORD: password
+      # Значення з .env, а якщо його немає, то після :- за замовчуванням
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${POSTGRES_DB:-images_db}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-password}
     depends_on:
       db:
         condition: service_healthy   # чекаємо, поки postgres реально прийматиме з'єднання
@@ -55,16 +56,17 @@ services:
     # Через command, бо TZ діє тільки при першому створенні тому db_data.
     command: ["postgres", "-c", "timezone=Europe/Kyiv"]
     environment:
-      POSTGRES_DB: images_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ${POSTGRES_DB:-images_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     volumes:
       - db_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro   # створює таблицю images
     ports:
       - "127.0.0.1:5432:5432"   # як і бекенд, тільки для локальної перевірки
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d images_db"]
+      # $$ щоб змінні підставив сам контейнер, а не compose
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
