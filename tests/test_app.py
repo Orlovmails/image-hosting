@@ -32,6 +32,7 @@ import app  # noqa: E402 імпортуємо саме тут, після під
 
 # Справжні функції бази, до підміни. Потрібні в DatabaseQueryTests.
 ORIGINAL_SAVE_METADATA = app.save_metadata
+ORIGINAL_COUNT_IMAGES = app.count_images
 ORIGINAL_GET_IMAGES = app.get_images
 ORIGINAL_DELETE_IMAGE_RECORD = app.delete_image_record
 import psycopg2  # noqa: E402
@@ -60,16 +61,16 @@ def fake_save_metadata(filename, original_name, size, file_type, upload_time=Non
     return image_id
 
 
-def fake_get_images(page):
+def fake_count_images():
+    return len(fake_rows)
+
+
+def fake_get_images(limit, offset):
     rows = sorted(fake_rows, key=lambda r: r["upload_time"], reverse=True)
-    pages = max(1, (len(rows) + app.PER_PAGE - 1) // app.PER_PAGE)
-    page = min(page, pages)
-    start = (page - 1) * app.PER_PAGE
-    result = [
+    return [
         (r["id"], r["filename"], r["original_name"], r["size"], r["upload_time"], r["file_type"])
-        for r in rows[start:start + app.PER_PAGE]
+        for r in rows[offset:offset + limit]
     ]
-    return result, page, pages
 
 
 def fake_delete_image_record(image_id):
@@ -95,6 +96,7 @@ def fill_fake_rows(count, with_files=False):
 def setUpModule():
     global _server, _base_url
     app.save_metadata = fake_save_metadata
+    app.count_images = fake_count_images
     app.get_images = fake_get_images
     app.delete_image_record = fake_delete_image_record
     _server = ThreadingHTTPServer(("127.0.0.1", 0), app.ImageServerHandler)
@@ -534,11 +536,12 @@ class ImagesListTests(unittest.TestCase):
 
     def test_db_error_returns_500(self):
         error = psycopg2.OperationalError("база не відповідає")
-        with mock.patch.object(app, "get_images", side_effect=error):
-            code, body = http_get("/images-list")
-        self.assertEqual(code, 500)
-        self.assertIn("Не вдалося отримати список зображень", body.decode("utf-8"))
-        self.assertIn("база не відповідає", last_log_line())
+        for name in ("count_images", "get_images"):
+            with mock.patch.object(app, name, side_effect=error):
+                code, body = http_get("/images-list")
+            self.assertEqual(code, 500, name)
+            self.assertIn("Не вдалося отримати список зображень", body.decode("utf-8"))
+            self.assertIn("база не відповідає", last_log_line())
 
 
 class FakeCursor:
@@ -577,29 +580,24 @@ class FakeConnection:
 class DatabaseQueryTests(unittest.TestCase):
     """Справжні функції бази, тільки з фейковим з'єднанням."""
 
-    def run_get_images(self, total, page):
-        cursor = FakeCursor([(total,)])
+    def test_count_images(self):
+        cursor = FakeCursor([(25,)])
         conn = FakeConnection(cursor)
         with mock.patch.object(app, "get_connection", return_value=conn):
-            result = ORIGINAL_GET_IMAGES(page)
+            total = ORIGINAL_COUNT_IMAGES()
+        self.assertEqual(total, 25)
+        self.assertEqual(cursor.queries, [("SELECT COUNT(*) FROM images", None)])
         self.assertTrue(conn.closed)
-        return result, cursor.queries[-1]
 
-    def test_uses_limit_and_offset(self):
-        (rows, page, pages), (query, params) = self.run_get_images(25, 2)
-        self.assertEqual(query, "SELECT * FROM images ORDER BY upload_time DESC LIMIT %s OFFSET %s")
-        self.assertEqual(params, (10, 10))
-        self.assertEqual((page, pages), (2, 3))
-
-    def test_page_after_end_becomes_last(self):
-        (rows, page, pages), (query, params) = self.run_get_images(25, 999)
-        self.assertEqual(params, (10, 20))
-        self.assertEqual((page, pages), (3, 3))
-
-    def test_empty_table(self):
-        (rows, page, pages), (query, params) = self.run_get_images(0, 1)
-        self.assertEqual(params, (10, 0))
-        self.assertEqual((page, pages), (1, 1))
+    def test_get_images_uses_limit_and_offset(self):
+        cursor = FakeCursor([])
+        conn = FakeConnection(cursor)
+        with mock.patch.object(app, "get_connection", return_value=conn):
+            ORIGINAL_GET_IMAGES(10, 20)
+        self.assertEqual(cursor.queries, [
+            ("SELECT * FROM images ORDER BY upload_time DESC LIMIT %s OFFSET %s", (10, 20)),
+        ])
+        self.assertTrue(conn.closed)
 
     def run_delete(self, fetchone_result):
         cursor = FakeCursor([fetchone_result])
@@ -628,6 +626,25 @@ class DatabaseQueryTests(unittest.TestCase):
 
     def test_delete_unknown_id_returns_none(self):
         self.assertIsNone(self.run_delete(None))
+
+
+class PageBoundsTests(unittest.TestCase):
+    """Розрахунок сторінок окремо від бази: (page, total) -> (page, pages)."""
+
+    def test_page_inside_list(self):
+        self.assertEqual(app.page_bounds(2, 25), (2, 3))
+
+    def test_page_after_end_becomes_last(self):
+        self.assertEqual(app.page_bounds(999, 25), (3, 3))
+
+    def test_empty_table_has_one_page(self):
+        self.assertEqual(app.page_bounds(1, 0), (1, 1))
+        self.assertEqual(app.page_bounds(5, 0), (1, 1))
+
+    def test_ten_and_eleven_records(self):
+        self.assertEqual(app.page_bounds(1, 10), (1, 1))
+        self.assertEqual(app.page_bounds(2, 10), (1, 1))
+        self.assertEqual(app.page_bounds(2, 11), (2, 2))
 
 
 class DeleteByIdTests(unittest.TestCase):
