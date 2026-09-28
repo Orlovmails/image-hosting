@@ -40,13 +40,13 @@ LOGS_DIR = os.environ.get("LOGS_DIR", os.path.join(BASE_DIR, "logs"))
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", "8000"))
 
-# Підключення до PostgreSQL. У Docker хост db, це ім'я сервісу з compose.yaml.
-# Без Docker підключаємось до бази на localhost.
+# Підключення до PostgreSQL. Імена змінних ті самі, що й у сервісу db, значення з .env.
+# У Docker хост db, це ім'я сервісу з compose.yaml. Без Docker підключаємось до localhost.
 DB_HOST = os.environ.get("DB_HOST", "localhost")
 DB_PORT = os.environ.get("DB_PORT", "5432")
-DB_NAME = os.environ.get("DB_NAME", "images_db")
-DB_USER = os.environ.get("DB_USER", "postgres")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "password")
+DB_NAME = os.environ.get("POSTGRES_DB", "images_db")
+DB_USER = os.environ.get("POSTGRES_USER", "postgres")
+DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "password")
 
 # Обмеження на завантаження
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}

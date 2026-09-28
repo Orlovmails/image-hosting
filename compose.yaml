@@ -10,9 +10,9 @@ services:
       # Значення з .env, а якщо його немає, то після :- за замовчуванням
       DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-5432}
-      DB_NAME: ${POSTGRES_DB:-images_db}
-      DB_USER: ${POSTGRES_USER:-postgres}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-images_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     depends_on:
       db:
         condition: service_healthy   # чекаємо, поки postgres реально прийматиме з'єднання
