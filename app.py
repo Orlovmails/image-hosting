@@ -155,25 +155,27 @@ def save_metadata(filename, original_name, size, file_type):
         conn.close()
 
 
-def get_images(page):
-    """
-    Одна сторінка записів з таблиці images, останні завантажені першими.
-    Повертає рядки, номер сторінки і скільки всього сторінок.
-    Якщо попросили сторінку за межами списку, віддаємо останню.
-    """
+def count_images():
+    """Скільки всього записів у таблиці images."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM images")
-        total = cursor.fetchone()[0]
-        pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
-        page = min(page, pages)
+        return cursor.fetchone()[0]
+    finally:
+        conn.close()
 
+
+def get_images(limit, offset):
+    """Записи з таблиці images, останні завантажені першими."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
         cursor.execute(
             "SELECT * FROM images ORDER BY upload_time DESC LIMIT %s OFFSET %s",
-            (PER_PAGE, (page - 1) * PER_PAGE),
+            (limit, offset),
         )
-        return cursor.fetchall(), page, pages
+        return cursor.fetchall()
     finally:
         conn.close()
 
@@ -290,6 +292,15 @@ def render_pagination(page, pages):
     )
 
 
+def page_bounds(page, total):
+    """
+    Скільки всього сторінок і яку з них показати.
+    Якщо попросили сторінку за межами списку, віддаємо останню.
+    """
+    pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    return min(page, pages), pages
+
+
 def parse_page(query):
     """Номер сторінки з ?page=N. Все, що не є додатним числом, вважаємо першою сторінкою."""
     value = parse_qs(query).get("page", ["1"])[0]
@@ -381,7 +392,9 @@ class ImageServerHandler(BaseHTTPRequestHandler):
     def handle_images_list(self, page):
         """Сторінка з таблицею картінок з бази, по PER_PAGE на сторінку."""
         try:
-            rows, page, pages = get_images(page)
+            total = count_images()
+            page, pages = page_bounds(page, total)
+            rows = get_images(PER_PAGE, (page - 1) * PER_PAGE)
         except psycopg2.Error as error:
             log("Помилка", f"не вдалося отримати список зображень з бази ({str(error).strip()})")
             message = '<p class="images-list__empty">Не вдалося отримати список зображень</p>'
