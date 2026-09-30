@@ -263,6 +263,8 @@ def render_images_table(rows, page=1):
     """
     Робить HTML-таблицю з рядків бази. Оригінальне ім'я прийшло від користувача, тому екрануємо.
     Номер сторінки передаємо у форму видалення, щоб після неї повернутись туди ж.
+    У картинок, завантажених до появи мініатюр, файлу в thumbs/ немає,
+    тому onerror підставляє оригінал, а CSS зменшує його до того ж розміру.
     """
     if not rows:
         return '<p class="images-list__empty">Немає завантажених зображень</p>'
@@ -270,8 +272,14 @@ def render_images_table(rows, page=1):
     lines = []
     for image_id, filename, original_name, size, upload_time, file_type in rows:
         name = html.escape(filename)
+        thumb = (
+            f'<a href="/images/{name}" target="_blank">'
+            f'<img class="images-table__thumb" src="/images/thumbs/{name}" alt="" loading="lazy"'
+            f" onerror=\"this.onerror=null; this.src='/images/{name}'\"></a>"
+        )
         lines.append(
             "<tr>"
+            f"<td>{thumb}</td>"
             f'<td><a href="/images/{name}" target="_blank">{name}</a></td>'
             f"<td>{html.escape(original_name)}</td>"
             f"<td>{size / 1024:.1f}</td>"
@@ -286,7 +294,7 @@ def render_images_table(rows, page=1):
     return (
         '<table class="images-table">'
         "<thead><tr>"
-        "<th>Назва файлу</th><th>Оригінальна назва</th><th>Розмір (КБ)</th>"
+        "<th>Прев'ю</th><th>Назва файлу</th><th>Оригінальна назва</th><th>Розмір (КБ)</th>"
         "<th>Дата завантаження</th><th>Тип файлу</th><th>Дія</th>"
         "</tr></thead>"
         "<tbody>" + "".join(lines) + "</tbody>"
