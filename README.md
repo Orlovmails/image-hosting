@@ -747,6 +747,8 @@ project/
 docker compose up --build
 ```
 
+Окремо нічого налаштовувати не потрібно: без файлу `.env` беруться значення за замовчуванням (див. [Налаштування](#налаштування)).
+
 Піднімаються три контейнери: `db` (PostgreSQL), `app` (Python-бекенд) і `nginx`. Бекенд стартує лише після того, як база готова приймати з'єднання (healthcheck). Таблиця `images` створюється автоматично з `db/init.sql` при першому запуску.
 
 Після запуску доступні:
@@ -779,9 +781,31 @@ docker compose down -v
 python app.py
 ```
 
+## Налаштування
+
+Параметри бази задаються в одному місці - у файлі `.env` у корені проєкту. `docker compose` читає його сам і передає ті самі значення і сервісу `db`, і бекенду `app`.
+
+| Змінна | За замовчуванням | Що це |
+| --- | --- | --- |
+| `POSTGRES_DB` | `images_db` | назва бази |
+| `POSTGRES_USER` | `postgres` | користувач бази |
+| `POSTGRES_PASSWORD` | `password` | пароль бази |
+| `DB_HOST` | `db` | хост бази для бекенду (ім'я сервісу в `compose.yaml`) |
+| `DB_PORT` | `5432` | порт бази для бекенду |
+
+У git лежить тільки приклад `.env.example`. Сам `.env` у git не потрапляє (`.gitignore`), бо в ньому пароль. Якщо `.env` немає, `compose.yaml` підставляє значення за замовчуванням з таблиці, тому проєкт запускається одразу після клонування.
+
+Щоб змінити значення:
+
+```bash
+cp .env.example .env
+```
+
+і відредагувати `.env`. Назва бази, користувач і пароль застосовуються тільки при першому створенні тому `db_data`, тому після їх зміни потрібно `docker compose down -v`.
+
 ## База даних
 
-Сервіс `db` у `compose.yaml`: образ `postgres:17-alpine`, контейнер `postgres_container`, база `images_db`, користувач `postgres`, пароль `password`. Дані лежать у томі `db_data`.
+Сервіс `db` у `compose.yaml`: образ `postgres:17-alpine`, контейнер `postgres_container`, база, користувач і пароль з `.env` (за замовчуванням `images_db`, `postgres`, `password`). Дані лежать у томі `db_data`.
 
 Таблиця `images` (`db/init.sql`):
 
@@ -794,7 +818,7 @@ python app.py
 | `upload_time` | `TIMESTAMP DEFAULT CURRENT_TIMESTAMP` | дата та час завантаження |
 | `file_type` | `TEXT NOT NULL` | формат файлу: `jpg`, `png` або `gif` |
 
-Бекенд підключається до бази через psycopg2 з параметрами зі змінних оточення `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (у Docker їх задає `compose.yaml`). На кожну операцію відкривається окреме з'єднання. При старті бекенд перевіряє підключення і пише результат у лог.
+Бекенд підключається до бази через psycopg2 з параметрами зі змінних оточення `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DB_HOST`, `DB_PORT` - тих самих, що й у сервісу `db` (див. [Налаштування](#налаштування)). На кожну операцію відкривається окреме з'єднання. При старті бекенд перевіряє підключення і пише результат у лог.
 
 Як працює завантаження:
 
@@ -918,10 +942,10 @@ python3 backup.py
 
 Скрипт:
 
-1. виконує `pg_dump` у контейнері `postgres_container`;
-2. зберігає результат у `backups/backup_<дата>_<час>.sql`;
+1. виконує `pg_dump` у контейнері `postgres_container` і записує дамп у тимчасовий файл усередині контейнера (користувача й базу бере з `.env`);
+2. копіює готовий файл через `docker cp` у `backups/backup_<дата>_<час>.sql` і видаляє тимчасовий файл у контейнері;
 3. пише в `app.log` рядок `Успіх: резервну копію бази ... створено` або `Помилка: резервну копію бази не створено (<причина>)`;
-4. якщо бекап не вдався, недописаний файл видаляється, а скрипт завершується з кодом 1.
+4. якщо бекап не вдався, недописаний файл не лишається, а скрипт завершується з кодом 1.
 
 Щоб бекап робився за розкладом, скрипт можна додати в cron (Linux/WSL), наприклад щодня о 03:00:
 
@@ -931,25 +955,47 @@ python3 backup.py
 
 ### Вручну
 
+Те саме, що робить скрипт. Дамп створюється файлом усередині контейнера, а потім копіюється на хост. Команди однаково працюють у bash і в PowerShell. Якщо в `.env` інші користувач або база, їх треба підставити замість `postgres` та `images_db`.
+
 ```bash
-docker exec postgres_container pg_dump --clean --if-exists -U postgres images_db > backups/backup_2025-01-24_153000.sql
+docker exec postgres_container pg_dump --clean --if-exists -U postgres -f /tmp/backup.sql images_db
 ```
 
-Відмінності від команди з ТЗ:
+```bash
+docker cp postgres_container:/tmp/backup.sql backups/backup_2025-01-24_153000.sql
+```
 
-- без `-t`: з ним Docker додає у вивід символи `\r`, і дамп виходить пошкодженим;
-- з `--clean --if-exists`: дамп спочатку видаляє таблицю `images`, тому відновлення в робочу базу замінює її повністю, а не падає на помилці "already exists".
+```bash
+docker exec postgres_container rm /tmp/backup.sql
+```
+
+Відмінності від команди з ТЗ (`docker exec -t ... pg_dump ... > backup.sql`):
+
+- дамп не передається через вивід `docker exec` і перенаправлення `>` на хості, а пишеться у файл самим `pg_dump` (`-f`) і копіюється через `docker cp` байт у байт. Так файл не залежить ні від псевдотерміналу, ні від оболонки хоста;
+- `--clean --if-exists`: дамп спочатку видаляє таблицю `images`, тому відновлення в робочу базу замінює її повністю, а не падає на помилці "already exists".
 
 ### Відновлення з резервної копії
 
 1. Переконатися, що контейнери запущені (`docker compose up`).
-2. Виконати, підставивши потрібний файл:
+2. Скопіювати потрібний файл у контейнер бази:
 
 ```bash
-docker exec -i postgres_container psql -U postgres images_db < backups/backup_2025-01-24_153000.sql
+docker cp backups/backup_2025-01-24_153000.sql postgres_container:/tmp/restore.sql
 ```
 
-3. Відкрити `http://localhost:8080/images-list` і перевірити, що список відповідає копії.
+3. Виконати його там же і прибрати тимчасовий файл:
+
+```bash
+docker exec postgres_container psql -U postgres -d images_db -f /tmp/restore.sql
+```
+
+```bash
+docker exec postgres_container rm /tmp/restore.sql
+```
+
+4. Відкрити `http://localhost:8080/images-list` і перевірити, що список відповідає копії.
+
+Команда з ТЗ `docker exec -i postgres_container psql -U postgres images_db < backup.sql` теж працює, але тільки в bash: у PowerShell оператор `<` не підтримується. Варіант з `docker cp` і `psql -f` працює в обох.
 
 Таблиця `images` замінюється даними з копії повністю, разом із лічильником `id`, тож нові завантаження продовжують нумерацію. Файли зображень у копію бази не входять, вони лежать у томі `images`.
 
@@ -958,6 +1004,7 @@ docker exec -i postgres_container psql -U postgres images_db < backups/backup_20
 ```text
 app.py             Python-бекенд: маршрути, валідація, збереження, робота з базою, логування
 backup.py          скрипт резервного копіювання бази
+.env.example       приклад налаштувань бази (скопіювати в .env, щоб змінити)
 requirements.txt   залежності Python (Pillow, psycopg2-binary)
 Dockerfile         образ бекенду (multi-stage build)
 compose.yaml       опис сервісів app + nginx + db, томів і мережі
