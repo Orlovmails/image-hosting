@@ -4,7 +4,8 @@
 Запускати з кореня проєкту, коли контейнери працюють (docker compose up):
     python backup.py
 
-Робить pg_dump у контейнері бази і кладе результат у backups/backup_<дата>_<час>.sql.
+Робить pg_dump у файл усередині контейнера бази, забирає його через docker cp
+у backups/backup_<дата>_<час>.sql і прибирає тимчасовий файл у контейнері.
 Результат записує в app.log усередині контейнера бекенду, поруч з іншими діями.
 """
 
@@ -36,29 +37,37 @@ def write_log(action, message):
         print("Не вдалося записати в app.log, контейнер бекенду не запущений?")
 
 
+def run(command):
+    """Запускає команду. Повертає текст помилки одним рядком або None, якщо все добре."""
+    try:
+        result = subprocess.run(command, capture_output=True)
+    except FileNotFoundError:
+        return "команду docker не знайдено"
+    if result.returncode != 0:
+        return " ".join(result.stderr.decode("utf-8", errors="replace").split())
+    return None
+
+
 def main():
     os.makedirs(BACKUPS_DIR, exist_ok=True)
     filename = f"backup_{datetime.now():%Y-%m-%d_%H%M%S}.sql"
     path = os.path.join(BACKUPS_DIR, filename)
+    tmp_path = f"/tmp/{filename}"
 
-    # Без -t, хоч у команді з ТЗ він є: з ним docker додає у вивід \r і дамп псується.
+    # Дамп пишемо у файл прямо в контейнері, а вже готовий файл копіюємо на хост.
     # --clean --if-exists: дамп спершу видаляє таблицю, тому відновлення в робочу базу
     # її перезаписує, а не падає на "already exists" і дублікатах id.
     # Користувача і базу підставляє сам контейнер зі своїх змінних, тобто з того ж .env.
-    command = ["docker", "exec", DB_CONTAINER, "sh", "-c",
-               'pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB"']
-    try:
-        with open(path, "wb") as f:
-            result = subprocess.run(command, stdout=f, stderr=subprocess.PIPE)
-    except FileNotFoundError:
-        os.remove(path)
-        print("Команду docker не знайдено")
-        return 1
+    error = run(["docker", "exec", DB_CONTAINER, "sh", "-c",
+                 'pg_dump --clean --if-exists -U "$POSTGRES_USER" -f "$1" "$POSTGRES_DB"',
+                 "sh", tmp_path])
+    if error is None:
+        error = run(["docker", "cp", f"{DB_CONTAINER}:{tmp_path}", path])
+    run(["docker", "exec", DB_CONTAINER, "rm", "-f", tmp_path])
 
-    if result.returncode != 0:
-        os.remove(path)
-        # Помилка буває в кілька рядків, а в лозі все має бути одним рядком
-        error = " ".join(result.stderr.decode("utf-8", errors="replace").split())
+    if error is not None:
+        if os.path.exists(path):
+            os.remove(path)
         print(f"Помилка резервного копіювання: {error}")
         write_log("Помилка", f"резервну копію бази не створено ({error})")
         return 1
