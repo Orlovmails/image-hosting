@@ -15,8 +15,6 @@ from datetime import datetime
 
 DB_CONTAINER = "postgres_container"
 APP_CONTAINER = "image-server-app"
-DB_NAME = "images_db"
-DB_USER = "postgres"
 
 BACKUPS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
 
@@ -46,8 +44,9 @@ def main():
     # Без -t, хоч у команді з ТЗ він є: з ним docker додає у вивід \r і дамп псується.
     # --clean --if-exists: дамп спершу видаляє таблицю, тому відновлення в робочу базу
     # її перезаписує, а не падає на "already exists" і дублікатах id.
-    command = ["docker", "exec", DB_CONTAINER, "pg_dump", "--clean", "--if-exists",
-               "-U", DB_USER, DB_NAME]
+    # Користувача і базу підставляє сам контейнер зі своїх змінних, тобто з того ж .env.
+    command = ["docker", "exec", DB_CONTAINER, "sh", "-c",
+               'pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB"']
     try:
         with open(path, "wb") as f:
             result = subprocess.run(command, stdout=f, stderr=subprocess.PIPE)
