@@ -392,8 +392,23 @@ body {
 }
 
 /* Дата не має переноситись посередині */
-.images-table td:nth-child(4) {
+.images-table td:nth-child(5) {
     white-space: nowrap;
+}
+
+/* Згенероване ім'я файлу довге і без пробілів, без переносу таблиця вилазить за сторінку */
+.images-table td:nth-child(2) {
+    word-break: break-all;
+}
+
+/* Мініатюра: квадрат 60x60, картинка обрізається по центру, а не розтягується */
+.images-table__thumb {
+    display: block;
+    width: 60px;
+    height: 60px;
+    object-fit: cover;
+    border-radius: 8px;
+    background-color: #eef0f5;
 }
 
 .images-list__empty {

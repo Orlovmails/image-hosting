@@ -37,6 +37,11 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 IMAGES_DIR = os.environ.get("IMAGES_DIR", os.path.join(BASE_DIR, "images"))
 LOGS_DIR = os.environ.get("LOGS_DIR", os.path.join(BASE_DIR, "logs"))
 
+# Мініатюри для списку лежать поруч з картинками, тому Nginx віддає їх так само
+# за адресою /images/thumbs/<ім'я>. Ім'я файлу те саме, що й в оригіналу.
+THUMBS_DIR = os.path.join(IMAGES_DIR, "thumbs")
+THUMB_SIZE = (120, 120)
+
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", "8000"))
 
@@ -87,6 +92,7 @@ CONTENT_TYPES = {
 # Логи
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
+os.makedirs(THUMBS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 # Консоль у Windows не в UTF-8, і без цього замість українських літер
@@ -211,6 +217,21 @@ def content_type_for(path):
     return CONTENT_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
 
 
+def save_thumbnail(data, image_format, path):
+    """Зменшена копія картинки зі збереженням пропорцій. Для gif береться перший кадр."""
+    image = Image.open(io.BytesIO(data))
+    image.thumbnail(THUMB_SIZE)
+    image.save(path, format=image_format)
+
+
+def remove_thumbnail(filename):
+    """Прибирає мініатюру, якщо вона є. У старих картинок її може й не бути."""
+    try:
+        os.remove(os.path.join(THUMBS_DIR, os.path.basename(filename)))
+    except FileNotFoundError:
+        pass
+
+
 # Розбираємо multipart руками
 def extract_file_data(handler):
     """
@@ -242,6 +263,8 @@ def render_images_table(rows, page=1):
     """
     Робить HTML-таблицю з рядків бази. Оригінальне ім'я прийшло від користувача, тому екрануємо.
     Номер сторінки передаємо у форму видалення, щоб після неї повернутись туди ж.
+    У картинок, завантажених до появи мініатюр, файлу в thumbs/ немає,
+    тому onerror підставляє оригінал, а CSS зменшує його до того ж розміру.
     """
     if not rows:
         return '<p class="images-list__empty">Немає завантажених зображень</p>'
@@ -249,8 +272,14 @@ def render_images_table(rows, page=1):
     lines = []
     for image_id, filename, original_name, size, upload_time, file_type in rows:
         name = html.escape(filename)
+        thumb = (
+            f'<a href="/images/{name}" target="_blank">'
+            f'<img class="images-table__thumb" src="/images/thumbs/{name}" alt="" loading="lazy"'
+            f" onerror=\"this.onerror=null; this.src='/images/{name}'\"></a>"
+        )
         lines.append(
             "<tr>"
+            f"<td>{thumb}</td>"
             f'<td><a href="/images/{name}" target="_blank">{name}</a></td>'
             f"<td>{html.escape(original_name)}</td>"
             f"<td>{size / 1024:.1f}</td>"
@@ -265,7 +294,7 @@ def render_images_table(rows, page=1):
     return (
         '<table class="images-table">'
         "<thead><tr>"
-        "<th>Назва файлу</th><th>Оригінальна назва</th><th>Розмір (КБ)</th>"
+        "<th>Прев'ю</th><th>Назва файлу</th><th>Оригінальна назва</th><th>Розмір (КБ)</th>"
         "<th>Дата завантаження</th><th>Тип файлу</th><th>Дія</th>"
         "</tr></thead>"
         "<tbody>" + "".join(lines) + "</tbody>"
@@ -452,6 +481,7 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             log("Помилка", f"запис id {image_id} видалено, але файл {filename} відсутній на диску")
         except OSError as error:
             log("Помилка", f"запис id {image_id} видалено, але файл {filename} не вдалося видалити ({error})")
+        remove_thumbnail(filename)
 
         self.redirect(f"/images-list?page={page}")
 
@@ -542,12 +572,19 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             self.send_json(500, {"error": "не вдалося зберегти файл"})
             return
 
+        # Без мініатюри картинка однаково працює, тому її помилка завантаження не зупиняє
+        try:
+            save_thumbnail(data, image_format, os.path.join(THUMBS_DIR, unique_name))
+        except (OSError, ValueError) as error:
+            log("Помилка", f"не вдалося створити мініатюру ({original_name}): {error}")
+
         # Файл без запису в базі нікому не потрібен, тому якщо база не відповіла, прибираємо його
         file_type = FORMAT_TO_EXTENSION[image_format].lstrip(".")
         try:
             image_id = save_metadata(unique_name, original_name, len(data), file_type)
         except psycopg2.Error as error:
             os.remove(file_path)
+            remove_thumbnail(unique_name)
             log("Помилка", f"не вдалося зберегти метадані в базу ({original_name}): {str(error).strip()}")
             self.send_json(500, {"error": "не вдалося зберегти дані про файл"})
             return

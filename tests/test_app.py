@@ -647,9 +647,77 @@ class PageBoundsTests(unittest.TestCase):
         self.assertEqual(app.page_bounds(2, 11), (2, 2))
 
 
+class ThumbnailTests(unittest.TestCase):
+    def thumb_path(self, filename):
+        return os.path.join(app.THUMBS_DIR, filename)
+
+    def test_thumbnail_for_jpg_png_gif(self):
+        for fmt, filename in (("JPEG", "big.jpg"), ("PNG", "big.png"), ("GIF", "big.gif")):
+            code, res = post_upload(filename, make_image(fmt, size=(300, 200)), "image/*")
+            self.assertEqual(code, 200)
+            with Image.open(self.thumb_path(res["id"])) as thumb:
+                self.assertEqual(thumb.format, fmt)
+                # пропорції 3:2 зберігаються, більша сторона 120
+                self.assertEqual(thumb.size, (120, 80))
+
+    def test_small_image_is_not_enlarged(self):
+        code, res = post_upload("small.png", make_image("PNG", size=(20, 20)), "image/png")
+        with Image.open(self.thumb_path(res["id"])) as thumb:
+            self.assertEqual(thumb.size, (20, 20))
+
+    def test_thumbnail_is_served(self):
+        code, res = post_upload("pic.png", make_image("PNG", size=(300, 300)), "image/png")
+        code, body = http_get("/images/thumbs/" + res["id"])
+        self.assertEqual(code, 200)
+        with Image.open(io.BytesIO(body)) as thumb:
+            self.assertEqual(thumb.size, (120, 120))
+
+    def test_thumbnail_removed_when_db_fails(self):
+        thumbs_before = set(os.listdir(app.THUMBS_DIR))
+        error = psycopg2.OperationalError("база не відповідає")
+        with mock.patch.object(app, "save_metadata", side_effect=error):
+            code, _ = post_upload("pic.png", make_image("PNG"), "image/png")
+        self.assertEqual(code, 500)
+        self.assertEqual(set(os.listdir(app.THUMBS_DIR)), thumbs_before)
+
+    def test_upload_works_when_thumbnail_fails(self):
+        with mock.patch.object(app, "save_thumbnail", side_effect=OSError("диск повний")):
+            code, res = post_upload("pic.png", make_image("PNG"), "image/png")
+        self.assertEqual(code, 200)
+        self.assertEqual(fake_rows[-1]["filename"], res["id"])
+        self.assertTrue(os.path.exists(os.path.join(app.IMAGES_DIR, res["id"])))
+        with open(os.path.join(app.LOGS_DIR, "app.log"), encoding="utf-8") as f:
+            self.assertIn("не вдалося створити мініатюру (pic.png): диск повний", f.read())
+
+    def test_list_shows_thumbnail_with_fallback(self):
+        fill_fake_rows(1)
+        name = fake_rows[0]["filename"]
+        page = http_get("/images-list")[1].decode("utf-8")
+        self.assertIn("<th>Прев'ю</th>", page)
+        self.assertIn(f'src="/images/thumbs/{name}"', page)
+        # старі картинки без мініатюри показують оригінал
+        self.assertIn(f"this.src='/images/{name}'", page)
+
+
 class DeleteByIdTests(unittest.TestCase):
     def setUp(self):
         fill_fake_rows(3, with_files=True)
+
+    def test_delete_removes_thumbnail(self):
+        row = fake_rows[0]
+        thumb = os.path.join(app.THUMBS_DIR, row["filename"])
+        with open(thumb, "wb") as f:
+            f.write(make_image("PNG"))
+        code, _, _ = post_no_redirect(f"/delete/{row['id']}")
+        self.assertEqual(code, 303)
+        self.assertFalse(os.path.exists(thumb))
+
+    def test_delete_without_thumbnail(self):
+        """Картинки, завантажені до появи мініатюр, видаляються як і раніше."""
+        row = fake_rows[0]
+        code, _, _ = post_no_redirect(f"/delete/{row['id']}")
+        self.assertEqual(code, 303)
+        self.assertIn("Успіх", last_log_line())
 
     def test_delete_removes_record_and_file(self):
         row = fake_rows[0]
