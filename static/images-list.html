@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Каталог зображень</title>
+    <title>Список зображень</title>
     <link rel="stylesheet" href="/css/reset.css?v=1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,15 +17,15 @@
 <body>
     <section class="upload__intro">
         <h2 class="upload__title">Завантажені зображення</h2>
-        <p class="upload__description">Усі картинки, доступні за прямими посиланнями.</p>
+        <p class="upload__description">Усі картинки з бази, найновіші зверху.</p>
     </section>
     <nav class="upload__tabs">
-        <button class="upload__tab" id="upload-tab-btn">Завантажити</button>
-        <button class="upload__tab upload__tab--active" id="images-tab-btn">Зображення</button>
+        <a class="upload__tab" href="/upload">Завантажити</a>
+        <a class="upload__tab upload__tab--active" href="/images-list">Зображення</a>
     </nav>
-    <section id="file-list-wrapper">
+    <section class="images-list">
+        {{content}}
     </section>
-    <script src="/js/images.js?v=1"></script>
 </body>
 
 </html>

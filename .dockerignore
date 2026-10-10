@@ -1,3 +1,7 @@
+# Налаштування потрібні compose, а не образу
+.env
+.env.example
+
 # Git
 .git
 .gitignore
@@ -6,6 +10,7 @@
 # Дані застосунку лежать у томах, в образі вони не потрібні
 images
 logs
+backups
 
 # Сміття від Python
 __pycache__

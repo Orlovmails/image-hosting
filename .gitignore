@@ -10,6 +10,11 @@ images/*
 !images/.gitkeep
 logs/*
 !logs/.gitkeep
+backups/*
+!backups/.gitkeep
+
+# Справжні налаштування з паролем, у git тільки .env.example
+.env
 
 # Системні файли та редактори
 .DS_Store

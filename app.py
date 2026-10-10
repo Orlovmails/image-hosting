@@ -4,12 +4,15 @@
 Що він робить:
    віддає сторінки сайту з папки static/
    приймає картінки на POST /upload, перевіряє їх і зберігає
-   віддає список завантажених файлів на GET /api/images
+   показує таблицю картінок з бази на GET /images-list
+   видаляє картінку і запис про неї на POST /delete/<id>
    записує всі дії в лог app.log
+   зберігає метадані картінок у PostgreSQL
 
-Зі сторонніх бібліотек тут тільки Pillow, все інше дефолтні.
+Зі сторонніх бібліотек тут Pillow і psycopg2, все інше дефолтні.
 """
 
+import html
 import io
 import json
 import logging
@@ -18,8 +21,9 @@ import re
 import sys
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, unquote
+from urllib.parse import parse_qs, urlparse, unquote
 
+import psycopg2
 from PIL import Image
 
 # Налаштування
@@ -36,6 +40,14 @@ LOGS_DIR = os.environ.get("LOGS_DIR", os.path.join(BASE_DIR, "logs"))
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", "8000"))
 
+# Підключення до PostgreSQL. Імена змінних ті самі, що й у сервісу db, значення з .env.
+# У Docker хост db, це ім'я сервісу з compose.yaml. Без Docker підключаємось до localhost.
+DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_PORT = os.environ.get("DB_PORT", "5432")
+DB_NAME = os.environ.get("POSTGRES_DB", "images_db")
+DB_USER = os.environ.get("POSTGRES_USER", "postgres")
+DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "password")
+
 # Обмеження на завантаження
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
 MAX_FILE_SIZE = 5 * 1024 * 1024                  # 5 МБ максимум для самого файлу
@@ -47,13 +59,17 @@ HARD_BODY_LIMIT = MAX_FILE_SIZE + 1024 * 1024
 # Розширення беремо з реального вмісту, а не з імені файлу, так надійніше.
 FORMAT_TO_EXTENSION = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif"}
 
+# Скільки картинок показуємо на одній сторінці /images-list
+PER_PAGE = 10
+
 # Сторінки сайту маршрут і файл у static/, який на ньому показуємо
 PAGES = {
     "/": "index.html",
     "/upload": "upload.html",
-    "/gallery": "images.html",
-    "/images/": "images.html",  
 }
+
+# Старі адреси каталогу. Тепер список живе на /images-list, а ці просто перенаправляють туди.
+OLD_CATALOG_PATHS = ("/gallery", "/images/")
 
 # Типи вмісту для статичних файлів
 CONTENT_TYPES = {
@@ -95,6 +111,86 @@ def log(action, message):
     """Пише рядок у лог у форматі з ТЗ: [Дата/час] Дія: повідомлення."""
     level = logging.WARNING if action == "Помилка" else logging.INFO
     logger.log(level, "%s: %s", action, message)
+
+
+# База даних
+
+def get_connection():
+    """Нове з'єднання на кожну операцію, бо сервер багатопотоковий."""
+    return psycopg2.connect(
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT,
+        connect_timeout=5,
+    )
+
+
+def test_connection():
+    """Перевіряє базу при старті. Сервер запускається в будь-якому разі."""
+    try:
+        conn = get_connection()
+        conn.close()
+        log("Успіх", "з'єднання з базою даних успішне")
+    except psycopg2.Error as error:
+        log("Помилка", f"не вдалося підключитися до бази даних ({str(error).strip()})")
+
+
+def save_metadata(filename, original_name, size, file_type):
+    """Записує дані про збережену картинку в таблицю images і повертає id нового запису."""
+    query = """
+    INSERT INTO images (filename, original_name, size, file_type)
+    VALUES (%s, %s, %s, %s)
+    RETURNING id
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (filename, original_name, size, file_type))
+        image_id = cursor.fetchone()[0]
+        conn.commit()
+        return image_id
+    finally:
+        conn.close()
+
+
+def count_images():
+    """Скільки всього записів у таблиці images."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM images")
+        return cursor.fetchone()[0]
+    finally:
+        conn.close()
+
+
+def get_images(limit, offset):
+    """Записи з таблиці images, останні завантажені першими."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM images ORDER BY upload_time DESC LIMIT %s OFFSET %s",
+            (limit, offset),
+        )
+        return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def delete_metadata(image_id):
+    """Видаляє запис з images. Повертає ім'я файлу або None, якщо такого id немає."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM images WHERE id = %s RETURNING filename", (image_id,))
+        row = cursor.fetchone()
+        conn.commit()
+        return row[0] if row else None
+    finally:
+        conn.close()
 
 
 # Доп функції
@@ -140,6 +236,80 @@ def extract_file_data(handler):
     return data, match.group(1).decode() if match else ""
 
 
+# Сторінка списку зображень
+
+def render_images_table(rows, page=1):
+    """
+    Робить HTML-таблицю з рядків бази. Оригінальне ім'я прийшло від користувача, тому екрануємо.
+    Номер сторінки передаємо у форму видалення, щоб після неї повернутись туди ж.
+    """
+    if not rows:
+        return '<p class="images-list__empty">Немає завантажених зображень</p>'
+
+    lines = []
+    for image_id, filename, original_name, size, upload_time, file_type in rows:
+        name = html.escape(filename)
+        lines.append(
+            "<tr>"
+            f'<td><a href="/images/{name}" target="_blank">{name}</a></td>'
+            f"<td>{html.escape(original_name)}</td>"
+            f"<td>{size / 1024:.1f}</td>"
+            f"<td>{upload_time:%Y-%m-%d %H:%M:%S}</td>"
+            f"<td>{html.escape(file_type)}</td>"
+            f'<td><form method="post" action="/delete/{image_id}?page={page}">'
+            '<button class="delete-btn" type="submit">Видалити</button>'
+            "</form></td>"
+            "</tr>"
+        )
+
+    return (
+        '<table class="images-table">'
+        "<thead><tr>"
+        "<th>Назва файлу</th><th>Оригінальна назва</th><th>Розмір (КБ)</th>"
+        "<th>Дата завантаження</th><th>Тип файлу</th><th>Дія</th>"
+        "</tr></thead>"
+        "<tbody>" + "".join(lines) + "</tbody>"
+        "</table>"
+    )
+
+
+def render_pagination(page, pages):
+    """Кнопки між сторінками. На краях списку кнопка вимкнена."""
+    if page > 1:
+        prev_btn = f'<a class="pagination__btn" href="/images-list?page={page - 1}">Попередня сторінка</a>'
+    else:
+        prev_btn = '<button class="pagination__btn" disabled>Попередня сторінка</button>'
+
+    if page < pages:
+        next_btn = f'<a class="pagination__btn" href="/images-list?page={page + 1}">Наступна сторінка</a>'
+    else:
+        next_btn = '<button class="pagination__btn" disabled>Наступна сторінка</button>'
+
+    return (
+        '<nav class="pagination">'
+        f'{prev_btn}<span class="pagination__info">Сторінка {page} з {pages}</span>{next_btn}'
+        "</nav>"
+    )
+
+
+def page_bounds(page, total):
+    """
+    Скільки всього сторінок і яку з них показати.
+    Якщо попросили сторінку за межами списку, віддаємо останню.
+    """
+    pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    return min(page, pages), pages
+
+
+def parse_page(query):
+    """Номер сторінки з ?page=N. Все, що не є додатним числом, вважаємо першою сторінкою."""
+    value = parse_qs(query).get("page", ["1"])[0]
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 1
+
+
 # HTTP обробник
 
 class ImageServerHandler(BaseHTTPRequestHandler):
@@ -166,6 +336,19 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self._send(code, body, "application/json; charset=utf-8")
 
+    def send_page(self, code, template, content):
+        """Підставляє готовий HTML у шаблон зі static/ на місце {{content}}."""
+        with open(os.path.join(STATIC_DIR, template), encoding="utf-8") as f:
+            page = f.read().replace("{{content}}", content)
+        self._send(code, page.encode("utf-8"), "text/html; charset=utf-8")
+
+    def redirect(self, location):
+        """303: браузер відкриває вказану адресу звичайним GET (і після POST теж)."""
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def send_file(self, base_dir, name, not_found_message):
         """Віддає файл з base_dir і не дає вийти за межі цієї папки."""
         path = resolve_inside(base_dir, name)
@@ -183,8 +366,10 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
         if path in PAGES:
             self.send_file(STATIC_DIR, PAGES[path], "сторінку не знайдено")
-        elif path == "/api/images":
-            self.handle_list_images()
+        elif path in OLD_CATALOG_PATHS:
+            self.redirect("/images-list")
+        elif path == "/images-list":
+            self.handle_images_list(parse_page(urlparse(self.path).query))
         elif path.startswith(("/css/", "/js/", "/img/")):
             self.send_file(STATIC_DIR, path, "файл не знайдено")
         elif path.startswith("/images/"):
@@ -204,58 +389,71 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         finally:
             self.head_only = False
 
-    def handle_list_images(self):
-        """Віддає JSON зі списком імен картинок, найновіші йдуть першими."""
+    def handle_images_list(self, page):
+        """Сторінка з таблицею картінок з бази, по PER_PAGE на сторінку."""
         try:
-            entries = []
-            for name in os.listdir(IMAGES_DIR):
-                full = os.path.join(IMAGES_DIR, name)
-                ext = os.path.splitext(name)[1].lower()
-                if os.path.isfile(full) and ext in ALLOWED_EXTENSIONS:
-                    entries.append((os.path.getmtime(full), name))
-            entries.sort(reverse=True)
-            self.send_json(200, [name for _, name in entries])
-        except OSError:
-            self.send_json(500, {"error": "не вдалося прочитати каталог зображень"})
-
-    # Маршрут DELETE
-
-    def do_DELETE(self):
-        path = urlparse(self.path).path
-        if path.startswith("/api/images/"):
-            self.handle_delete_image(unquote(path[len("/api/images/"):]))
-        else:
-            self.send_json(404, {"error": "маршрут не знайдено"})
-
-    def handle_delete_image(self, name):
-        """Видаляє картинку з папки images. Ім'я перевіряємо, щоб не вилізти за межі."""
-        path = resolve_inside(IMAGES_DIR, name)
-        if path is None:
-            log("Помилка", f"спроба видалити неіснуючий файл ({name})")
-            self.send_json(404, {"error": "зображення не знайдено"})
+            total = count_images()
+            page, pages = page_bounds(page, total)
+            rows = get_images(PER_PAGE, (page - 1) * PER_PAGE)
+        except psycopg2.Error as error:
+            log("Помилка", f"не вдалося отримати список зображень з бази ({str(error).strip()})")
+            message = '<p class="images-list__empty">Не вдалося отримати список зображень</p>'
+            self.send_page(500, "images-list.html", message)
             return
-
-        try:
-            os.remove(path)
-        except OSError:
-            log("Помилка", f"не вдалося видалити файл ({name})")
-            self.send_json(500, {"error": "не вдалося видалити файл"})
-            return
-
-        deleted_name = os.path.basename(path)
-        log("Успіх", f"зображення {deleted_name} видалено")
-        self.send_json(200, {"deleted": deleted_name})
+        content = render_images_table(rows, page)
+        if rows:
+            content += render_pagination(page, pages)
+        self.send_page(200, "images-list.html", content)
 
     # Маршрути POST
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
-        if urlparse(self.path).path == "/upload":
+        url = urlparse(self.path)
+        if url.path == "/upload":
             self.handle_upload(length)
+        elif url.path.startswith("/delete/"):
+            self._discard_body(length)
+            self.handle_delete(url.path[len("/delete/"):], parse_page(url.query))
         else:
             # Тіло дочитуємо навіть для 404, інакше клієнт побачить обрив з'єднання і дулю
             self._discard_body(length)
             self.send_json(404, {"error": "маршрут не знайдено"})
+
+    def handle_delete(self, image_id, page):
+        """Видаляє запис з бази і сам файл, потім повертає на ту ж сторінку списку."""
+        back_link = '<p class="images-list__empty"><a href="/images-list">Повернутися до списку</a></p>'
+
+        if not image_id.isdigit():
+            log("Помилка", f"спроба видалити зображення з некоректним id ({image_id})")
+            message = '<p class="images-list__empty">Зображення не знайдено</p>'
+            self.send_page(404, "images-list.html", message + back_link)
+            return
+
+        try:
+            filename = delete_metadata(int(image_id))
+        except psycopg2.Error as error:
+            log("Помилка", f"не вдалося видалити запис id {image_id} з бази ({str(error).strip()})")
+            message = '<p class="images-list__empty">Не вдалося видалити зображення</p>'
+            self.send_page(500, "images-list.html", message + back_link)
+            return
+
+        if filename is None:
+            log("Помилка", f"зображення з id {image_id} не знайдено в базі")
+            message = f'<p class="images-list__empty">Зображення з id {image_id} не знайдено</p>'
+            self.send_page(404, "images-list.html", message + back_link)
+            return
+
+        # Запис уже видалено, тож навіть якщо файлу немає, користувача повертаємо до списку
+        try:
+            os.remove(os.path.join(IMAGES_DIR, os.path.basename(filename)))
+            log("Успіх", f"зображення {filename} (id {image_id}) видалено")
+        except FileNotFoundError:
+            log("Помилка", f"запис id {image_id} видалено, але файл {filename} відсутній на диску")
+        except OSError as error:
+            log("Помилка", f"запис id {image_id} видалено, але файл {filename} не вдалося видалити ({error})")
+
+        self.redirect(f"/images-list?page={page}")
 
     def _discard_body(self, length, cap=HARD_BODY_LIMIT * 2):
         """
@@ -334,16 +532,27 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
         # Розширення ставимо за справжнім форматом, щоб png не росказував що він jpg
         unique_name = uuid.uuid4().hex + FORMAT_TO_EXTENSION[image_format]
+        file_path = os.path.join(IMAGES_DIR, unique_name)
 
         try:
-            with open(os.path.join(IMAGES_DIR, unique_name), "wb") as f:
+            with open(file_path, "wb") as f:
                 f.write(data)
         except OSError:
             log("Помилка", f"не вдалося зберегти файл ({original_name})")
             self.send_json(500, {"error": "не вдалося зберегти файл"})
             return
 
-        log("Успіх", f"зображення {unique_name} завантажено")
+        # Файл без запису в базі нікому не потрібен, тому якщо база не відповіла, прибираємо його
+        file_type = FORMAT_TO_EXTENSION[image_format].lstrip(".")
+        try:
+            image_id = save_metadata(unique_name, original_name, len(data), file_type)
+        except psycopg2.Error as error:
+            os.remove(file_path)
+            log("Помилка", f"не вдалося зберегти метадані в базу ({original_name}): {str(error).strip()}")
+            self.send_json(500, {"error": "не вдалося зберегти дані про файл"})
+            return
+
+        log("Успіх", f"зображення {unique_name} (id {image_id}) завантажено")
         self.send_json(200, {"id": unique_name, "url": "/images/" + unique_name})
 
     def log_message(self, format, *args):
@@ -354,6 +563,7 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 def main():
     server = ThreadingHTTPServer((HOST, PORT), ImageServerHandler)
     logger.info("Сервер запущено на http://%s:%s", HOST, PORT)
+    test_connection()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

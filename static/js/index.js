@@ -6,12 +6,3 @@ if (randomBlock) {
 }
 
 document.body.style.setProperty('background-color', '#151515');
-
-document.addEventListener('DOMContentLoaded', function () {
-    // Кнопки в шапці ведуть туди, що вказано в data-href: /upload і /images/
-    document.querySelectorAll('.header__button-btn[data-href]').forEach(function (button) {
-        button.addEventListener('click', function () {
-            window.location.href = button.dataset.href;
-        });
-    });
-});

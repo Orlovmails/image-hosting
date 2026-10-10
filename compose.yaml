@@ -6,16 +6,24 @@ services:
       IMAGES_DIR: /images
       LOGS_DIR: /logs
       PORT: "8000"
+      TZ: Europe/Kyiv          # час у app.log київський, а не UTC
+      # Значення з .env, а якщо його немає, то після :- за замовчуванням
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-images_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    depends_on:
+      db:
+        condition: service_healthy   # чекаємо, поки postgres реально прийматиме з'єднання
     volumes:
       - images:/images        # том для завантажених картінок
       - logs:/logs            # том для логів (app.log)
       # Та сама папка static, що і в Nginx. Інакше після правки HTML треба було б
       # перезбирати образ, а CSS і JS оновлювались би одразу, і виходив би вінегрет.
       - ./static:/app/static:ro
-    ports:
-      # Порт лише для локальної перевірки. Ззовні доступний тільки Nginx,
-      # бо за ТЗ файли мають роздаватись через нього, без обхідних шляхів.
-      - "127.0.0.1:8000:8000"
+    expose:
+      - "8000"
     restart: unless-stopped
     networks:
       - app-net
@@ -36,10 +44,39 @@ services:
     networks:
       - app-net
 
-# Два томи для постійного зберігання
+  # База для метаданих картінок.
+  # Версію беру 17, бо з 18-ї postgres зберігає дані в іншій папці,
+  # і том на /var/lib/postgresql/data там уже не паше.
+  db:
+    image: postgres:17-alpine
+    container_name: postgres_container
+    # Часовий пояс бази. Від нього залежить upload_time (CURRENT_TIMESTAMP).
+    # Через command, бо TZ діє тільки при першому створенні тому db_data.
+    command: ["postgres", "-c", "timezone=Europe/Kyiv"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-images_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro   # створює таблицю images
+    expose:
+      - "5432"
+    healthcheck:
+      # $$ щоб змінні підставив сам контейнер, а не compose
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - app-net
+
+# Томи для постійного зберігання
 volumes:
   images:
   logs:
+  db_data:
 
 # Внутрішня мережа, через неї nginx звертається до бекенду за іменем app
 networks:
